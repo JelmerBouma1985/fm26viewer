@@ -15,3 +15,8 @@ spring:
 server:
   address: 127.0.0.1
   port: 8081
+
+fm:
+  save:
+    path: Unemployed_edited.fm
+    autoImportOnStartup: true
