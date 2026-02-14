@@ -53,6 +53,28 @@ public class GameRamReaderController {
         return gameRamReaderService.dumpMemoryToFile(pid, address, size, out);
     }
 
+    @GetMapping("/snapshot")
+    public SnapshotInfo snapshot(
+            @RequestParam int pid,
+            @RequestParam String address,
+            @RequestParam(defaultValue = "262144") int size,
+            @RequestParam String tag
+    ) {
+        return gameRamReaderService.snapshotWindow(pid, address, size, tag);
+    }
+
+    @GetMapping("/diff")
+    public SnapshotDiffResult diff(
+            @RequestParam String tagA,
+            @RequestParam String tagB,
+            @RequestParam(defaultValue = "2000") int maxDiffs,
+            @RequestParam(required = false) Integer oldValue,
+            @RequestParam(required = false) Integer newValue,
+            @RequestParam(defaultValue = "1") int width
+    ) {
+        return gameRamReaderService.diffSnapshots(tagA, tagB, maxDiffs, oldValue, newValue, width);
+    }
+
     @GetMapping("/scan-pattern")
     public PatternScanResult scanPattern(
             @RequestParam int pid,
@@ -114,6 +136,67 @@ public class GameRamReaderController {
         return gameRamReaderService.scanForInt32ByPid(pid, value, maxHits, maxBytesPerRegion, anonymousWritableOnly, noExecOnly, scanPointers, maxPointerScanBytesPerRegion, maxPointerReferencesPerHit, regionStart, regionEnd);
     }
 
+    @GetMapping("/analyze-int")
+    public AnalyzeIntResult analyzeInt(
+            @RequestParam int pid,
+            @RequestParam int value,
+            @RequestParam(defaultValue = "50") int maxHits,
+            @RequestParam(defaultValue = "33554432") long maxBytesPerRegion,
+            @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "8192") int windowBytes,
+            @RequestParam(defaultValue = "20") int maxAnalyzedHits,
+            @RequestParam(required = false) String regionStart,
+            @RequestParam(required = false) String regionEnd
+    ) {
+        return gameRamReaderService.analyzeInt32ByPid(pid, value, maxHits, maxBytesPerRegion, anonymousWritableOnly, noExecOnly, windowBytes, maxAnalyzedHits, regionStart, regionEnd);
+    }
+
+    @GetMapping("/follow-pointers")
+    public PointerFollowResult followPointers(
+            @RequestParam int pid,
+            @RequestParam String address,
+            @RequestParam(defaultValue = "512") int bytes,
+            @RequestParam(defaultValue = "64") int maxCandidates,
+            @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "true") boolean analyzeTargets,
+            @RequestParam(defaultValue = "262144") int targetWindowBytes
+    ) {
+        return gameRamReaderService.followPointers(pid, address, bytes, maxCandidates, anonymousWritableOnly, noExecOnly, analyzeTargets, targetWindowBytes);
+    }
+
+    @GetMapping("/player-attributes-by-id")
+    public PlayerAttributesByIdResult playerAttributesById(
+            @RequestParam int pid,
+            @RequestParam int playerId,
+            @RequestParam(defaultValue = "60") int maxIdHits,
+            @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "512") int followBytes,
+            @RequestParam(defaultValue = "96") int followMaxCandidates,
+            @RequestParam(defaultValue = "262144") int targetWindowBytes
+    ) {
+        return gameRamReaderService.playerAttributesById(pid, playerId, maxIdHits, anonymousWritableOnly, noExecOnly, followBytes, followMaxCandidates, targetWindowBytes);
+    }
+
+    @GetMapping("/enumerate-players-in-region")
+    public EnumeratePlayersResult enumeratePlayersInRegion(
+            @RequestParam int pid,
+            @RequestParam String regionStart,
+            @RequestParam String regionEnd,
+            @RequestParam(defaultValue = "5000") int maxPlayers,
+            @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "true") boolean validateWithAttributes,
+            @RequestParam(defaultValue = "50") int maxValidate,
+            @RequestParam(defaultValue = "512") int followBytes,
+            @RequestParam(defaultValue = "96") int followMaxCandidates,
+            @RequestParam(defaultValue = "131072") int targetWindowBytes
+    ) {
+        return gameRamReaderService.enumeratePlayersInRegion(pid, regionStart, regionEnd, maxPlayers, anonymousWritableOnly, noExecOnly, validateWithAttributes, maxValidate, followBytes, followMaxCandidates, targetWindowBytes);
+    }
+
     @GetMapping("/scan-pointers-to")
     public PointerScanResult scanPointersTo(
             @RequestParam int pid,
@@ -121,9 +204,11 @@ public class GameRamReaderController {
             @RequestParam(defaultValue = "200") int maxReferences,
             @RequestParam(defaultValue = "33554432") long maxBytesPerRegion,
             @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
-            @RequestParam(defaultValue = "true") boolean noExecOnly
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(required = false) String regionStart,
+            @RequestParam(required = false) String regionEnd
     ) {
-        return gameRamReaderService.scanPointersTo(pid, target, maxReferences, maxBytesPerRegion, anonymousWritableOnly, noExecOnly);
+        return gameRamReaderService.scanPointersTo(pid, target, maxReferences, maxBytesPerRegion, anonymousWritableOnly, noExecOnly, regionStart, regionEnd);
     }
 
     @GetMapping("/scan-lvtp")
@@ -153,6 +238,53 @@ public class GameRamReaderController {
             @RequestParam(required = false) String regionEnd
     ) {
         return gameRamReaderService.attributesFromBestLvtpRun(pid, anonymousWritableOnly, noExecOnly, maxRegions, maxBytesPerRegion, minRunRecords, regionStart, regionEnd);
+    }
+
+    @GetMapping("/lvtp-find-player-id")
+    public LvtpPlayerIdResult lvtpFindPlayerId(
+            @RequestParam int pid,
+            @RequestParam(defaultValue = "true") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "200") int maxRegions,
+            @RequestParam(defaultValue = "33554432") long maxBytesPerRegion,
+            @RequestParam(defaultValue = "40") int minRunRecords,
+            @RequestParam(defaultValue = "262144") int windowBeforeBytes,
+            @RequestParam(defaultValue = "262144") int windowAfterBytes,
+            @RequestParam(required = false) String regionStart,
+            @RequestParam(required = false) String regionEnd
+    ) {
+        return gameRamReaderService.findPlayerIdForBestLvtpRun(pid, anonymousWritableOnly, noExecOnly, maxRegions, maxBytesPerRegion, minRunRecords, windowBeforeBytes, windowAfterBytes, regionStart, regionEnd);
+    }
+
+    @GetMapping("/lvtp-active-player")
+    public ActiveLvtpPlayerResult lvtpActivePlayer(
+            @RequestParam int pid,
+            @RequestParam(defaultValue = "false") boolean anonymousWritableOnly,
+            @RequestParam(defaultValue = "true") boolean noExecOnly,
+            @RequestParam(defaultValue = "800") int maxRegions,
+            @RequestParam(defaultValue = "67108864") long maxBytesPerRegion,
+            @RequestParam(defaultValue = "40") int minRunRecords,
+            @RequestParam(defaultValue = "50") int maxPointerReferences,
+            @RequestParam(defaultValue = "20000000") long maxPointerScanBytesPerRegion,
+            @RequestParam(defaultValue = "0x138CF0000") String pointerRegionStart,
+            @RequestParam(defaultValue = "0x139CB0000") String pointerRegionEnd,
+            @RequestParam(defaultValue = "4") int maxDepth,
+            @RequestParam(defaultValue = "2500") int maxVisited
+    ) {
+        return gameRamReaderService.findActivePlayerFromBestLvtpRun(
+                pid,
+                anonymousWritableOnly,
+                noExecOnly,
+                maxRegions,
+                maxBytesPerRegion,
+                minRunRecords,
+                maxPointerReferences,
+                maxPointerScanBytesPerRegion,
+                pointerRegionStart,
+                pointerRegionEnd,
+                maxDepth,
+                maxVisited
+        );
     }
 
     @GetMapping("/scan")
