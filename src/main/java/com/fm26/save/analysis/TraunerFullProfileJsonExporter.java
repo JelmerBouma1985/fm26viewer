@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 
@@ -25,6 +26,10 @@ public final class TraunerFullProfileJsonExporter {
     private static final BlockDefinition GENERAL_BLOCK = new BlockDefinition("general", 66_582_033, 16, 250_000);
     private static final BlockDefinition GOALKEEPER_BLOCK = new BlockDefinition("goalkeeper", 66_582_063, 1, 250_000);
     private static final BlockDefinition POSITION_BLOCK = new BlockDefinition("positions", 66_582_065, 13, 250_000);
+    private static final Map<Integer, String> NATIONALITY_NAMES = Map.of(
+            129, "Austria",
+            158, "Netherlands"
+    );
 
     private static final List<FieldMapping> FIELD_MAPPINGS = List.of(
             new FieldMapping("crossing", TECHNICAL_PREFIX_BLOCK, 0, ValueEncoding.TIMES_FIVE),
@@ -289,7 +294,7 @@ public final class TraunerFullProfileJsonExporter {
         json.append("  },\n");
 
         json.append("  \"attributes\": {\n");
-        int totalFields = FIELD_MAPPINGS.size() + GENERAL_FIELD_MAPPINGS.size() + CONTRACT_FIELD_MAPPINGS.size() + 1;
+        int totalFields = FIELD_MAPPINGS.size() + GENERAL_FIELD_MAPPINGS.size() + CONTRACT_FIELD_MAPPINGS.size() + 3;
         int emitted = 0;
         for (FieldMapping mapping : FIELD_MAPPINGS) {
             byte[] block;
@@ -330,6 +335,32 @@ public final class TraunerFullProfileJsonExporter {
         int contractEndDayOfYear = WideValueEncoding.U16_LE.decode(contractTarget, 8);
         int contractEndYear = WideValueEncoding.U16_LE.decode(contractTarget, 10);
         LocalDate contractEnd = decodeDayOfYear(contractEndYear, contractEndDayOfYear);
+        int dateOfBirthDayOfYear = WideValueEncoding.U16_LE.decode(hiddenTarget, 26);
+        int dateOfBirthYear = WideValueEncoding.U16_LE.decode(hiddenTarget, 28);
+        LocalDate dateOfBirth = decodeDayOfYear(dateOfBirthYear, dateOfBirthDayOfYear);
+        int nationalityId = hiddenTarget[39] & 0xFF;
+
+        json.append("    ").append(quote("date of birth")).append(": {\n");
+        appendNestedField(json, "block", quote(HIDDEN_BLOCK.name()), true);
+        appendNestedField(json, "relativeOffset", Integer.toString(26), true);
+        appendNestedField(json, "absoluteOffset", Integer.toString(hiddenWindow.offset() + 26), true);
+        appendNestedField(json, "storage", quote("day_of_year_year_u16_le"), true);
+        appendNestedField(json, "storedDayOfYear", Integer.toString(dateOfBirthDayOfYear), true);
+        appendNestedField(json, "storedYear", Integer.toString(dateOfBirthYear), true);
+        appendNestedField(json, "decodedValue", quote(dateOfBirth == null ? "invalid" : dateOfBirth.toString()), false);
+        json.append("    },\n");
+        emitted++;
+
+        json.append("    ").append(quote("nationality")).append(": {\n");
+        appendNestedField(json, "block", quote(HIDDEN_BLOCK.name()), true);
+        appendNestedField(json, "relativeOffset", Integer.toString(39), true);
+        appendNestedField(json, "absoluteOffset", Integer.toString(hiddenWindow.offset() + 39), true);
+        appendNestedField(json, "storage", quote("country_id_u8"), true);
+        appendNestedField(json, "storedValue", Integer.toString(nationalityId), true);
+        appendNestedField(json, "decodedValue", quote(decodeNationality(nationalityId)), false);
+        json.append("    },\n");
+        emitted++;
+
         json.append("    ").append(quote("contract end")).append(": {\n");
         appendNestedField(json, "block", quote(CONTRACT_BLOCK.name()), true);
         appendNestedField(json, "relativeOffset", Integer.toString(8), true);
@@ -388,6 +419,10 @@ public final class TraunerFullProfileJsonExporter {
         } catch (RuntimeException exception) {
             return null;
         }
+    }
+
+    private static String decodeNationality(int nationalityId) {
+        return NATIONALITY_NAMES.getOrDefault(nationalityId, "country_id_" + nationalityId);
     }
 
     private static void renderBlock(
