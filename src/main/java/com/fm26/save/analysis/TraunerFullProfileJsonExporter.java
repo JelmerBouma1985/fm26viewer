@@ -19,6 +19,7 @@ public final class TraunerFullProfileJsonExporter {
 
     private static final int FMF_ZSTD_OFFSET = 26;
     private static final int TRAUNER_PLAYER_ID = 16_023_929;
+    private static final int TRAUNER_CLUB_DATABASE_ID = 1_013;
 
     private static final BlockDefinition TECHNICAL_PREFIX_BLOCK = new BlockDefinition("technical_prefix", 66_582_078, 83, 250_000);
     private static final BlockDefinition VISIBLE_BLOCK = new BlockDefinition("visible", 66_582_080, 81, 250_000);
@@ -163,12 +164,14 @@ public final class TraunerFullProfileJsonExporter {
         );
         byte[] goalkeeperTarget = slice(targetPayload, goalkeeperWindow.offset(), goalkeeperWindow.offset() + GOALKEEPER_BLOCK.length());
         ResolvedName resolvedName = resolveName(targetPayload, hiddenTarget);
+        String resolvedClub = resolveClubName(targetPayload, TRAUNER_CLUB_DATABASE_ID);
 
         System.out.println(renderJson(
                 inputs,
                 referencePayload.length,
                 targetPayload.length,
                 resolvedName,
+                resolvedClub,
                 technicalPrefixWindow,
                 technicalPrefixTarget,
                 visibleWindow,
@@ -268,6 +271,7 @@ public final class TraunerFullProfileJsonExporter {
             int referencePayloadSize,
             int targetPayloadSize,
             ResolvedName resolvedName,
+            String resolvedClub,
             MatchWindow technicalPrefixWindow,
             byte[] technicalPrefixTarget,
             MatchWindow visibleWindow,
@@ -289,7 +293,7 @@ public final class TraunerFullProfileJsonExporter {
         appendField(json, "name", quote(resolvedName.fullName()), true);
         appendField(json, "firstName", quote(resolvedName.firstName()), true);
         appendField(json, "lastName", quote(resolvedName.lastName()), true);
-        appendField(json, "club", quote("Feyenoord"), true);
+        appendField(json, "club", quote(resolvedClub), true);
         appendField(json, "referenceSave", quote(inputs.referenceSave().toString()), true);
         appendField(json, "targetSave", quote(inputs.targetSave().toString()), true);
         appendField(json, "referencePayloadSize", Integer.toString(referencePayloadSize), true);
@@ -434,6 +438,38 @@ public final class TraunerFullProfileJsonExporter {
             lastName = resolveStringById(payload, lastNameId, LAST_NAME_TABLE_REFERENCE);
         }
         return new ResolvedName(firstNameId, lastNameId, firstName, lastName, (firstName + " " + lastName).trim());
+    }
+
+    private static String resolveClubName(byte[] payload, int clubDatabaseId) {
+        byte[] idBytes = new byte[]{
+                (byte) (clubDatabaseId & 0xFF),
+                (byte) ((clubDatabaseId >>> 8) & 0xFF),
+                (byte) ((clubDatabaseId >>> 16) & 0xFF),
+                (byte) ((clubDatabaseId >>> 24) & 0xFF)
+        };
+        for (int offset = 4; offset + 4 <= payload.length; offset++) {
+            if (payload[offset] != idBytes[0]
+                    || payload[offset + 1] != idBytes[1]
+                    || payload[offset + 2] != idBytes[2]
+                    || payload[offset + 3] != idBytes[3]) {
+                continue;
+            }
+            for (int length = 1; length <= 64; length++) {
+                int stringStart = offset - length;
+                int lengthOffset = stringStart - 4;
+                if (lengthOffset < 0) {
+                    break;
+                }
+                if (WideValueEncoding.U32_LE.decode(payload, lengthOffset) != length) {
+                    continue;
+                }
+                if (!looksLikeText(payload, stringStart, length)) {
+                    continue;
+                }
+                return new String(payload, stringStart, length, StandardCharsets.UTF_8);
+            }
+        }
+        return "club_id_" + clubDatabaseId;
     }
 
     private static String resolveKnownStringEntry(byte[] payload, int entryOffset, int expectedId) {
