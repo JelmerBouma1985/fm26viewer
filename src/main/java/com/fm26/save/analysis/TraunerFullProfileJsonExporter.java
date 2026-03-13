@@ -7,6 +7,7 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -26,6 +27,12 @@ public final class TraunerFullProfileJsonExporter {
     private static final BlockDefinition GENERAL_BLOCK = new BlockDefinition("general", 66_582_033, 16, 250_000);
     private static final BlockDefinition GOALKEEPER_BLOCK = new BlockDefinition("goalkeeper", 66_582_063, 1, 250_000);
     private static final BlockDefinition POSITION_BLOCK = new BlockDefinition("positions", 66_582_065, 13, 250_000);
+    private static final int FIRST_NAME_ID_OFFSET = 7;
+    private static final int LAST_NAME_ID_OFFSET = 12;
+    private static final int FIRST_NAME_ENTRY_REFERENCE = 49_357_264;
+    private static final int LAST_NAME_ENTRY_REFERENCE = 53_807_583;
+    private static final int FIRST_NAME_TABLE_REFERENCE = 49_357_264;
+    private static final int LAST_NAME_TABLE_REFERENCE = 53_807_583;
     private static final Map<Integer, String> NATIONALITY_NAMES = Map.of(
             129, "Austria",
             158, "Netherlands"
@@ -155,11 +162,13 @@ public final class TraunerFullProfileJsonExporter {
                 GOALKEEPER_BLOCK.length()
         );
         byte[] goalkeeperTarget = slice(targetPayload, goalkeeperWindow.offset(), goalkeeperWindow.offset() + GOALKEEPER_BLOCK.length());
+        ResolvedName resolvedName = resolveName(targetPayload, hiddenTarget);
 
         System.out.println(renderJson(
                 inputs,
                 referencePayload.length,
                 targetPayload.length,
+                resolvedName,
                 technicalPrefixWindow,
                 technicalPrefixTarget,
                 visibleWindow,
@@ -258,6 +267,7 @@ public final class TraunerFullProfileJsonExporter {
             Inputs inputs,
             int referencePayloadSize,
             int targetPayloadSize,
+            ResolvedName resolvedName,
             MatchWindow technicalPrefixWindow,
             byte[] technicalPrefixTarget,
             MatchWindow visibleWindow,
@@ -276,7 +286,9 @@ public final class TraunerFullProfileJsonExporter {
         StringBuilder json = new StringBuilder(8192);
         json.append("{\n");
         appendField(json, "playerId", Integer.toString(TRAUNER_PLAYER_ID), true);
-        appendField(json, "name", quote("Gernot Trauner"), true);
+        appendField(json, "name", quote(resolvedName.fullName()), true);
+        appendField(json, "firstName", quote(resolvedName.firstName()), true);
+        appendField(json, "lastName", quote(resolvedName.lastName()), true);
         appendField(json, "club", quote("Feyenoord"), true);
         appendField(json, "referenceSave", quote(inputs.referenceSave().toString()), true);
         appendField(json, "targetSave", quote(inputs.targetSave().toString()), true);
@@ -410,6 +422,109 @@ public final class TraunerFullProfileJsonExporter {
         return json.toString();
     }
 
+    private static ResolvedName resolveName(byte[] payload, byte[] hiddenTarget) {
+        int firstNameId = WideValueEncoding.U32_LE.decode(hiddenTarget, FIRST_NAME_ID_OFFSET);
+        int lastNameId = WideValueEncoding.U32_LE.decode(hiddenTarget, LAST_NAME_ID_OFFSET);
+        String firstName = resolveKnownStringEntry(payload, FIRST_NAME_ENTRY_REFERENCE, firstNameId);
+        if (firstName == null) {
+            firstName = resolveStringById(payload, firstNameId, FIRST_NAME_TABLE_REFERENCE);
+        }
+        String lastName = resolveKnownStringEntry(payload, LAST_NAME_ENTRY_REFERENCE, lastNameId);
+        if (lastName == null) {
+            lastName = resolveStringById(payload, lastNameId, LAST_NAME_TABLE_REFERENCE);
+        }
+        return new ResolvedName(firstNameId, lastNameId, firstName, lastName, (firstName + " " + lastName).trim());
+    }
+
+    private static String resolveKnownStringEntry(byte[] payload, int entryOffset, int expectedId) {
+        if (entryOffset < 0 || entryOffset + 8 > payload.length) {
+            return null;
+        }
+        if (WideValueEncoding.U32_LE.decode(payload, entryOffset) != expectedId) {
+            return null;
+        }
+        int length = WideValueEncoding.U32_LE.decode(payload, entryOffset + 4);
+        if (length <= 0 || length > 64 || entryOffset + 8 + length > payload.length) {
+            return null;
+        }
+        if (!looksLikeText(payload, entryOffset + 8, length)) {
+            return null;
+        }
+        return new String(payload, entryOffset + 8, length, StandardCharsets.UTF_8);
+    }
+
+    private static String resolveStringById(byte[] payload, int stringId, int preferredOffset) {
+        String best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (int offset = 0; offset + 8 < payload.length; offset++) {
+            if (WideValueEncoding.U32_LE.decode(payload, offset) != stringId) {
+                continue;
+            }
+            int length = WideValueEncoding.U32_LE.decode(payload, offset + 4);
+            if (length <= 0 || length > 64 || offset + 8 + length > payload.length) {
+                continue;
+            }
+            if (!looksLikeText(payload, offset + 8, length)) {
+                continue;
+            }
+            String candidate = new String(payload, offset + 8, length, StandardCharsets.UTF_8);
+            int score = scoreStringCandidate(payload, offset, stringId, length, preferredOffset);
+            if (score == Integer.MIN_VALUE) {
+                continue;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return best == null ? "string_id_" + stringId : best;
+    }
+
+    private static int scoreStringCandidate(byte[] payload, int offset, int stringId, int length, int preferredOffset) {
+        boolean hasChain = false;
+        int currentOffset = offset;
+        int currentId = stringId;
+        int currentLength = length;
+        for (int step = 0; step < 6; step++) {
+            int nextOffset = currentOffset + 8 + currentLength;
+            if (nextOffset + 8 > payload.length) {
+                break;
+            }
+            int nextId = WideValueEncoding.U32_LE.decode(payload, nextOffset);
+            int nextLength = WideValueEncoding.U32_LE.decode(payload, nextOffset + 4);
+            if (nextId != currentId + 1) {
+                break;
+            }
+            if (nextLength <= 0 || nextLength > 64 || nextOffset + 8 + nextLength > payload.length) {
+                break;
+            }
+            if (!looksLikeText(payload, nextOffset + 8, nextLength)) {
+                break;
+            }
+            hasChain = true;
+            currentOffset = nextOffset;
+            currentId = nextId;
+            currentLength = nextLength;
+        }
+        if (!hasChain) {
+            return Integer.MIN_VALUE;
+        }
+        return -Math.abs(offset - preferredOffset);
+    }
+
+    private static boolean looksLikeText(byte[] payload, int start, int length) {
+        String decoded = new String(payload, start, length, StandardCharsets.UTF_8);
+        if (decoded.indexOf('\uFFFD') >= 0) {
+            return false;
+        }
+        for (int i = 0; i < decoded.length(); i++) {
+            if (Character.isLetter(decoded.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static LocalDate decodeDayOfYear(int year, int dayOfYear) {
         if (year < 1900 || year > 2500 || dayOfYear < 1 || dayOfYear > 366) {
             return null;
@@ -533,6 +648,9 @@ public final class TraunerFullProfileJsonExporter {
     }
 
     private record WideFieldMapping(String name, BlockDefinition block, int relativeOffset, WideValueEncoding encoding) {
+    }
+
+    private record ResolvedName(int firstNameId, int lastNameId, String firstName, String lastName, String fullName) {
     }
 
     private enum ValueEncoding {
