@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
 
@@ -20,6 +21,7 @@ public final class TraunerFullProfileJsonExporter {
     private static final BlockDefinition TECHNICAL_PREFIX_BLOCK = new BlockDefinition("technical_prefix", 66_582_078, 83, 250_000);
     private static final BlockDefinition VISIBLE_BLOCK = new BlockDefinition("visible", 66_582_080, 81, 250_000);
     private static final BlockDefinition HIDDEN_BLOCK = new BlockDefinition("hidden", 66_582_989, 96, 250_000);
+    private static final BlockDefinition CONTRACT_BLOCK = new BlockDefinition("contract", 66_582_844, 72, 250_000);
     private static final BlockDefinition GENERAL_BLOCK = new BlockDefinition("general", 66_582_033, 16, 250_000);
     private static final BlockDefinition GOALKEEPER_BLOCK = new BlockDefinition("goalkeeper", 66_582_063, 1, 250_000);
     private static final BlockDefinition POSITION_BLOCK = new BlockDefinition("positions", 66_582_065, 13, 250_000);
@@ -101,6 +103,10 @@ public final class TraunerFullProfileJsonExporter {
             new WideFieldMapping("potential ability", GENERAL_BLOCK, 8, WideValueEncoding.U16_LE)
     );
 
+    private static final List<WideFieldMapping> CONTRACT_FIELD_MAPPINGS = List.of(
+            new WideFieldMapping("salary_gbp_per_week", CONTRACT_BLOCK, 63, WideValueEncoding.U32_LE)
+    );
+
     private TraunerFullProfileJsonExporter() {
     }
 
@@ -120,6 +126,13 @@ public final class TraunerFullProfileJsonExporter {
         byte[] hiddenReference = slice(referencePayload, HIDDEN_BLOCK.referenceOffset(), HIDDEN_BLOCK.referenceOffset() + HIDDEN_BLOCK.length());
         MatchWindow hiddenWindow = locateBestWindow(targetPayload, hiddenReference, HIDDEN_BLOCK.referenceOffset(), HIDDEN_BLOCK.searchRadius());
         byte[] hiddenTarget = slice(targetPayload, hiddenWindow.offset(), hiddenWindow.offset() + HIDDEN_BLOCK.length());
+
+        MatchWindow contractWindow = new MatchWindow(
+                hiddenWindow.offset() - (HIDDEN_BLOCK.referenceOffset() - CONTRACT_BLOCK.referenceOffset()),
+                CONTRACT_BLOCK.length(),
+                CONTRACT_BLOCK.length()
+        );
+        byte[] contractTarget = slice(targetPayload, contractWindow.offset(), contractWindow.offset() + CONTRACT_BLOCK.length());
 
         byte[] generalReference = slice(referencePayload, GENERAL_BLOCK.referenceOffset(), GENERAL_BLOCK.referenceOffset() + GENERAL_BLOCK.length());
         MatchWindow generalWindow = locateBestWindow(targetPayload, generalReference, GENERAL_BLOCK.referenceOffset(), GENERAL_BLOCK.searchRadius());
@@ -148,6 +161,8 @@ public final class TraunerFullProfileJsonExporter {
                 visibleTarget,
                 hiddenWindow,
                 hiddenTarget,
+                contractWindow,
+                contractTarget,
                 generalWindow,
                 generalTarget,
                 goalkeeperWindow,
@@ -244,6 +259,8 @@ public final class TraunerFullProfileJsonExporter {
             byte[] visibleTarget,
             MatchWindow hiddenWindow,
             byte[] hiddenTarget,
+            MatchWindow contractWindow,
+            byte[] contractTarget,
             MatchWindow generalWindow,
             byte[] generalTarget,
             MatchWindow goalkeeperWindow,
@@ -265,13 +282,14 @@ public final class TraunerFullProfileJsonExporter {
         renderBlock(json, "technical_prefix", TECHNICAL_PREFIX_BLOCK, technicalPrefixWindow, technicalPrefixTarget, true);
         renderBlock(json, "visible", VISIBLE_BLOCK, visibleWindow, visibleTarget, true);
         renderBlock(json, "hidden", HIDDEN_BLOCK, hiddenWindow, hiddenTarget, true);
+        renderBlock(json, "contract", CONTRACT_BLOCK, contractWindow, contractTarget, true);
         renderBlock(json, "general", GENERAL_BLOCK, generalWindow, generalTarget, true);
         renderBlock(json, "goalkeeper", GOALKEEPER_BLOCK, goalkeeperWindow, goalkeeperTarget, true);
         renderBlock(json, "positions", POSITION_BLOCK, positionWindow, positionTarget, false);
         json.append("  },\n");
 
         json.append("  \"attributes\": {\n");
-        int totalFields = FIELD_MAPPINGS.size() + GENERAL_FIELD_MAPPINGS.size();
+        int totalFields = FIELD_MAPPINGS.size() + GENERAL_FIELD_MAPPINGS.size() + CONTRACT_FIELD_MAPPINGS.size() + 1;
         int emitted = 0;
         for (FieldMapping mapping : FIELD_MAPPINGS) {
             byte[] block;
@@ -309,6 +327,20 @@ public final class TraunerFullProfileJsonExporter {
             json.append('\n');
         }
 
+        int contractEndDayOfYear = WideValueEncoding.U16_LE.decode(contractTarget, 8);
+        int contractEndYear = WideValueEncoding.U16_LE.decode(contractTarget, 10);
+        LocalDate contractEnd = decodeDayOfYear(contractEndYear, contractEndDayOfYear);
+        json.append("    ").append(quote("contract end")).append(": {\n");
+        appendNestedField(json, "block", quote(CONTRACT_BLOCK.name()), true);
+        appendNestedField(json, "relativeOffset", Integer.toString(8), true);
+        appendNestedField(json, "absoluteOffset", Integer.toString(contractWindow.offset() + 8), true);
+        appendNestedField(json, "storage", quote("day_of_year_year_u16_le"), true);
+        appendNestedField(json, "storedDayOfYear", Integer.toString(contractEndDayOfYear), true);
+        appendNestedField(json, "storedYear", Integer.toString(contractEndYear), true);
+        appendNestedField(json, "decodedValue", quote(contractEnd == null ? "invalid" : contractEnd.toString()), false);
+        json.append("    },\n");
+        emitted++;
+
         for (WideFieldMapping mapping : GENERAL_FIELD_MAPPINGS) {
             int stored = mapping.encoding().decode(generalTarget, mapping.relativeOffset());
             json.append("    ").append(quote(mapping.name())).append(": {\n");
@@ -325,9 +357,37 @@ public final class TraunerFullProfileJsonExporter {
             }
             json.append('\n');
         }
+
+        for (WideFieldMapping mapping : CONTRACT_FIELD_MAPPINGS) {
+            int stored = mapping.encoding().decode(contractTarget, mapping.relativeOffset());
+            json.append("    ").append(quote(mapping.name())).append(": {\n");
+            appendNestedField(json, "block", quote(mapping.block().name()), true);
+            appendNestedField(json, "relativeOffset", Integer.toString(mapping.relativeOffset()), true);
+            appendNestedField(json, "absoluteOffset", Integer.toString(contractWindow.offset() + mapping.relativeOffset()), true);
+            appendNestedField(json, "storage", quote(mapping.encoding().jsonName()), true);
+            appendNestedField(json, "storedValue", Integer.toString(stored), true);
+            appendNestedField(json, "decodedValue", Integer.toString(stored), false);
+            json.append("    }");
+            emitted++;
+            if (emitted < totalFields) {
+                json.append(',');
+            }
+            json.append('\n');
+        }
         json.append("  }\n");
         json.append("}\n");
         return json.toString();
+    }
+
+    private static LocalDate decodeDayOfYear(int year, int dayOfYear) {
+        if (year < 1900 || year > 2500 || dayOfYear < 1 || dayOfYear > 366) {
+            return null;
+        }
+        try {
+            return LocalDate.ofYearDay(year, dayOfYear);
+        } catch (RuntimeException exception) {
+            return null;
+        }
     }
 
     private static void renderBlock(
@@ -472,6 +532,15 @@ public final class TraunerFullProfileJsonExporter {
             @Override
             int decode(byte[] block, int offset) {
                 return (block[offset] & 0xFF) | ((block[offset + 1] & 0xFF) << 8);
+            }
+        },
+        U32_LE("u32_le") {
+            @Override
+            int decode(byte[] block, int offset) {
+                return (block[offset] & 0xFF)
+                        | ((block[offset + 1] & 0xFF) << 8)
+                        | ((block[offset + 2] & 0xFF) << 16)
+                        | ((block[offset + 3] & 0xFF) << 24);
             }
         };
 
