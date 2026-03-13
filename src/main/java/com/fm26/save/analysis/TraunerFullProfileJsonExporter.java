@@ -21,6 +21,8 @@ public final class TraunerFullProfileJsonExporter {
     private static final BlockDefinition VISIBLE_BLOCK = new BlockDefinition("visible", 66_582_080, 81, 250_000);
     private static final BlockDefinition HIDDEN_BLOCK = new BlockDefinition("hidden", 66_582_989, 96, 250_000);
     private static final BlockDefinition GENERAL_BLOCK = new BlockDefinition("general", 66_582_033, 16, 250_000);
+    private static final BlockDefinition GOALKEEPER_BLOCK = new BlockDefinition("goalkeeper", 66_582_063, 1, 250_000);
+    private static final BlockDefinition POSITION_BLOCK = new BlockDefinition("positions", 66_582_065, 13, 250_000);
 
     private static final List<FieldMapping> FIELD_MAPPINGS = List.of(
             new FieldMapping("crossing", TECHNICAL_PREFIX_BLOCK, 0, ValueEncoding.TIMES_FIVE),
@@ -36,6 +38,8 @@ public final class TraunerFullProfileJsonExporter {
             new FieldMapping("vision", VISIBLE_BLOCK, 8, ValueEncoding.TIMES_FIVE),
             new FieldMapping("first touch", VISIBLE_BLOCK, 20, ValueEncoding.TIMES_FIVE),
             new FieldMapping("technique", VISIBLE_BLOCK, 21, ValueEncoding.TIMES_FIVE),
+            new FieldMapping("left foot", VISIBLE_BLOCK, 22, ValueEncoding.TIMES_FIVE),
+            new FieldMapping("right foot", VISIBLE_BLOCK, 23, ValueEncoding.TIMES_FIVE),
             new FieldMapping("flair", VISIBLE_BLOCK, 24, ValueEncoding.TIMES_FIVE),
             new FieldMapping("corners", VISIBLE_BLOCK, 25, ValueEncoding.TIMES_FIVE),
             new FieldMapping("teamwork", VISIBLE_BLOCK, 26, ValueEncoding.TIMES_FIVE),
@@ -72,7 +76,21 @@ public final class TraunerFullProfileJsonExporter {
             new FieldMapping("professionalism", HIDDEN_BLOCK, 51, ValueEncoding.RAW),
             new FieldMapping("sportmanship", HIDDEN_BLOCK, 52, ValueEncoding.RAW),
             new FieldMapping("temperament", HIDDEN_BLOCK, 53, ValueEncoding.RAW),
-            new FieldMapping("controversy", HIDDEN_BLOCK, 54, ValueEncoding.RAW)
+            new FieldMapping("controversy", HIDDEN_BLOCK, 54, ValueEncoding.RAW),
+            new FieldMapping("goalkeeper", GOALKEEPER_BLOCK, 0, ValueEncoding.RAW),
+            new FieldMapping("defender left", POSITION_BLOCK, 0, ValueEncoding.RAW),
+            new FieldMapping("defender central", POSITION_BLOCK, 1, ValueEncoding.RAW),
+            new FieldMapping("defender right", POSITION_BLOCK, 2, ValueEncoding.RAW),
+            new FieldMapping("defensive midfielder", POSITION_BLOCK, 3, ValueEncoding.RAW),
+            new FieldMapping("midfielder left", POSITION_BLOCK, 4, ValueEncoding.RAW),
+            new FieldMapping("midfielder central", POSITION_BLOCK, 5, ValueEncoding.RAW),
+            new FieldMapping("midfielder right", POSITION_BLOCK, 6, ValueEncoding.RAW),
+            new FieldMapping("attacking midfielder left", POSITION_BLOCK, 7, ValueEncoding.RAW),
+            new FieldMapping("attacking midfielder central", POSITION_BLOCK, 8, ValueEncoding.RAW),
+            new FieldMapping("attacking midfielder right", POSITION_BLOCK, 9, ValueEncoding.RAW),
+            new FieldMapping("striker", POSITION_BLOCK, 10, ValueEncoding.RAW),
+            new FieldMapping("wing back left", POSITION_BLOCK, 11, ValueEncoding.RAW),
+            new FieldMapping("wing back right", POSITION_BLOCK, 12, ValueEncoding.RAW)
     );
 
     private static final List<WideFieldMapping> GENERAL_FIELD_MAPPINGS = List.of(
@@ -107,6 +125,19 @@ public final class TraunerFullProfileJsonExporter {
         MatchWindow generalWindow = locateBestWindow(targetPayload, generalReference, GENERAL_BLOCK.referenceOffset(), GENERAL_BLOCK.searchRadius());
         byte[] generalTarget = slice(targetPayload, generalWindow.offset(), generalWindow.offset() + GENERAL_BLOCK.length());
 
+        MatchWindow positionWindow = new MatchWindow(
+                visibleWindow.offset() - (VISIBLE_BLOCK.referenceOffset() - POSITION_BLOCK.referenceOffset()),
+                POSITION_BLOCK.length(),
+                POSITION_BLOCK.length()
+        );
+        byte[] positionTarget = slice(targetPayload, positionWindow.offset(), positionWindow.offset() + POSITION_BLOCK.length());
+        MatchWindow goalkeeperWindow = new MatchWindow(
+                visibleWindow.offset() - (VISIBLE_BLOCK.referenceOffset() - GOALKEEPER_BLOCK.referenceOffset()),
+                GOALKEEPER_BLOCK.length(),
+                GOALKEEPER_BLOCK.length()
+        );
+        byte[] goalkeeperTarget = slice(targetPayload, goalkeeperWindow.offset(), goalkeeperWindow.offset() + GOALKEEPER_BLOCK.length());
+
         System.out.println(renderJson(
                 inputs,
                 referencePayload.length,
@@ -118,7 +149,11 @@ public final class TraunerFullProfileJsonExporter {
                 hiddenWindow,
                 hiddenTarget,
                 generalWindow,
-                generalTarget
+                generalTarget,
+                goalkeeperWindow,
+                goalkeeperTarget,
+                positionWindow,
+                positionTarget
         ));
     }
 
@@ -210,7 +245,11 @@ public final class TraunerFullProfileJsonExporter {
             MatchWindow hiddenWindow,
             byte[] hiddenTarget,
             MatchWindow generalWindow,
-            byte[] generalTarget
+            byte[] generalTarget,
+            MatchWindow goalkeeperWindow,
+            byte[] goalkeeperTarget,
+            MatchWindow positionWindow,
+            byte[] positionTarget
     ) {
         StringBuilder json = new StringBuilder(8192);
         json.append("{\n");
@@ -226,7 +265,9 @@ public final class TraunerFullProfileJsonExporter {
         renderBlock(json, "technical_prefix", TECHNICAL_PREFIX_BLOCK, technicalPrefixWindow, technicalPrefixTarget, true);
         renderBlock(json, "visible", VISIBLE_BLOCK, visibleWindow, visibleTarget, true);
         renderBlock(json, "hidden", HIDDEN_BLOCK, hiddenWindow, hiddenTarget, true);
-        renderBlock(json, "general", GENERAL_BLOCK, generalWindow, generalTarget, false);
+        renderBlock(json, "general", GENERAL_BLOCK, generalWindow, generalTarget, true);
+        renderBlock(json, "goalkeeper", GOALKEEPER_BLOCK, goalkeeperWindow, goalkeeperTarget, true);
+        renderBlock(json, "positions", POSITION_BLOCK, positionWindow, positionTarget, false);
         json.append("  },\n");
 
         json.append("  \"attributes\": {\n");
@@ -241,6 +282,12 @@ public final class TraunerFullProfileJsonExporter {
             } else if (mapping.block().name().equals(VISIBLE_BLOCK.name())) {
                 block = visibleTarget;
                 blockOffset = visibleWindow.offset();
+            } else if (mapping.block().name().equals(GOALKEEPER_BLOCK.name())) {
+                block = goalkeeperTarget;
+                blockOffset = goalkeeperWindow.offset();
+            } else if (mapping.block().name().equals(POSITION_BLOCK.name())) {
+                block = positionTarget;
+                blockOffset = positionWindow.offset();
             } else {
                 block = hiddenTarget;
                 blockOffset = hiddenWindow.offset();
