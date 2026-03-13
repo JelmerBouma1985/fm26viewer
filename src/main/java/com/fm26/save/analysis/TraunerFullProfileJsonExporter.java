@@ -20,6 +20,7 @@ public final class TraunerFullProfileJsonExporter {
     private static final BlockDefinition TECHNICAL_PREFIX_BLOCK = new BlockDefinition("technical_prefix", 66_582_078, 83, 250_000);
     private static final BlockDefinition VISIBLE_BLOCK = new BlockDefinition("visible", 66_582_080, 81, 250_000);
     private static final BlockDefinition HIDDEN_BLOCK = new BlockDefinition("hidden", 66_582_989, 96, 250_000);
+    private static final BlockDefinition GENERAL_BLOCK = new BlockDefinition("general", 66_582_033, 16, 250_000);
 
     private static final List<FieldMapping> FIELD_MAPPINGS = List.of(
             new FieldMapping("crossing", TECHNICAL_PREFIX_BLOCK, 0, ValueEncoding.TIMES_FIVE),
@@ -74,6 +75,14 @@ public final class TraunerFullProfileJsonExporter {
             new FieldMapping("controversy", HIDDEN_BLOCK, 54, ValueEncoding.RAW)
     );
 
+    private static final List<WideFieldMapping> GENERAL_FIELD_MAPPINGS = List.of(
+            new WideFieldMapping("home reputation", GENERAL_BLOCK, 0, WideValueEncoding.U16_LE),
+            new WideFieldMapping("current reputation", GENERAL_BLOCK, 2, WideValueEncoding.U16_LE),
+            new WideFieldMapping("world reputation", GENERAL_BLOCK, 4, WideValueEncoding.U16_LE),
+            new WideFieldMapping("current ability", GENERAL_BLOCK, 6, WideValueEncoding.U16_LE),
+            new WideFieldMapping("potential ability", GENERAL_BLOCK, 8, WideValueEncoding.U16_LE)
+    );
+
     private TraunerFullProfileJsonExporter() {
     }
 
@@ -94,6 +103,10 @@ public final class TraunerFullProfileJsonExporter {
         MatchWindow hiddenWindow = locateBestWindow(targetPayload, hiddenReference, HIDDEN_BLOCK.referenceOffset(), HIDDEN_BLOCK.searchRadius());
         byte[] hiddenTarget = slice(targetPayload, hiddenWindow.offset(), hiddenWindow.offset() + HIDDEN_BLOCK.length());
 
+        byte[] generalReference = slice(referencePayload, GENERAL_BLOCK.referenceOffset(), GENERAL_BLOCK.referenceOffset() + GENERAL_BLOCK.length());
+        MatchWindow generalWindow = locateBestWindow(targetPayload, generalReference, GENERAL_BLOCK.referenceOffset(), GENERAL_BLOCK.searchRadius());
+        byte[] generalTarget = slice(targetPayload, generalWindow.offset(), generalWindow.offset() + GENERAL_BLOCK.length());
+
         System.out.println(renderJson(
                 inputs,
                 referencePayload.length,
@@ -103,7 +116,9 @@ public final class TraunerFullProfileJsonExporter {
                 visibleWindow,
                 visibleTarget,
                 hiddenWindow,
-                hiddenTarget
+                hiddenTarget,
+                generalWindow,
+                generalTarget
         ));
     }
 
@@ -193,7 +208,9 @@ public final class TraunerFullProfileJsonExporter {
             MatchWindow visibleWindow,
             byte[] visibleTarget,
             MatchWindow hiddenWindow,
-            byte[] hiddenTarget
+            byte[] hiddenTarget,
+            MatchWindow generalWindow,
+            byte[] generalTarget
     ) {
         StringBuilder json = new StringBuilder(8192);
         json.append("{\n");
@@ -208,12 +225,14 @@ public final class TraunerFullProfileJsonExporter {
         json.append("  \"blocks\": {\n");
         renderBlock(json, "technical_prefix", TECHNICAL_PREFIX_BLOCK, technicalPrefixWindow, technicalPrefixTarget, true);
         renderBlock(json, "visible", VISIBLE_BLOCK, visibleWindow, visibleTarget, true);
-        renderBlock(json, "hidden", HIDDEN_BLOCK, hiddenWindow, hiddenTarget, false);
+        renderBlock(json, "hidden", HIDDEN_BLOCK, hiddenWindow, hiddenTarget, true);
+        renderBlock(json, "general", GENERAL_BLOCK, generalWindow, generalTarget, false);
         json.append("  },\n");
 
         json.append("  \"attributes\": {\n");
-        for (int i = 0; i < FIELD_MAPPINGS.size(); i++) {
-            FieldMapping mapping = FIELD_MAPPINGS.get(i);
+        int totalFields = FIELD_MAPPINGS.size() + GENERAL_FIELD_MAPPINGS.size();
+        int emitted = 0;
+        for (FieldMapping mapping : FIELD_MAPPINGS) {
             byte[] block;
             int blockOffset;
             if (mapping.block().name().equals(TECHNICAL_PREFIX_BLOCK.name())) {
@@ -236,7 +255,25 @@ public final class TraunerFullProfileJsonExporter {
             appendNestedField(json, "storedValue", Integer.toString(stored), true);
             appendNestedField(json, "decodedValue", decoded == null ? "null" : Integer.toString(decoded), false);
             json.append("    }");
-            if (i + 1 < FIELD_MAPPINGS.size()) {
+            emitted++;
+            if (emitted < totalFields) {
+                json.append(',');
+            }
+            json.append('\n');
+        }
+
+        for (WideFieldMapping mapping : GENERAL_FIELD_MAPPINGS) {
+            int stored = mapping.encoding().decode(generalTarget, mapping.relativeOffset());
+            json.append("    ").append(quote(mapping.name())).append(": {\n");
+            appendNestedField(json, "block", quote(mapping.block().name()), true);
+            appendNestedField(json, "relativeOffset", Integer.toString(mapping.relativeOffset()), true);
+            appendNestedField(json, "absoluteOffset", Integer.toString(generalWindow.offset() + mapping.relativeOffset()), true);
+            appendNestedField(json, "storage", quote(mapping.encoding().jsonName()), true);
+            appendNestedField(json, "storedValue", Integer.toString(stored), true);
+            appendNestedField(json, "decodedValue", Integer.toString(stored), false);
+            json.append("    }");
+            emitted++;
+            if (emitted < totalFields) {
                 json.append(',');
             }
             json.append('\n');
@@ -353,6 +390,9 @@ public final class TraunerFullProfileJsonExporter {
     private record FieldMapping(String name, BlockDefinition block, int relativeOffset, ValueEncoding encoding) {
     }
 
+    private record WideFieldMapping(String name, BlockDefinition block, int relativeOffset, WideValueEncoding encoding) {
+    }
+
     private enum ValueEncoding {
         RAW("raw") {
             @Override
@@ -378,5 +418,26 @@ public final class TraunerFullProfileJsonExporter {
         }
 
         abstract Integer decode(int stored);
+    }
+
+    private enum WideValueEncoding {
+        U16_LE("u16_le") {
+            @Override
+            int decode(byte[] block, int offset) {
+                return (block[offset] & 0xFF) | ((block[offset + 1] & 0xFF) << 8);
+            }
+        };
+
+        private final String jsonName;
+
+        WideValueEncoding(String jsonName) {
+            this.jsonName = jsonName;
+        }
+
+        private String jsonName() {
+            return jsonName;
+        }
+
+        abstract int decode(byte[] block, int offset);
     }
 }
