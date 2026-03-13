@@ -1,0 +1,15 @@
+name,old,new
+corners,1,20
+crossing,2,19
+dribbling,3,18
+finishing,4,17
+first touch,5,16
+free kicks,6,15
+heading,7,14
+long shots,8,13
+long throws,10,20
+marking,9,19
+passing,11,18
+penalty taking,13,1
+tackling,12,2
+technique,14,3
