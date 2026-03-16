@@ -1,1 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/fm26-save-db;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  sql:
+    init:
+      mode: always
 
+fm26:
+  import:
+    enabled: true
+    save-path: games/Feyenoord_after.fm

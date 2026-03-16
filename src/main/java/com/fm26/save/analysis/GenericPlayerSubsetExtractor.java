@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -29,6 +30,7 @@ public final class GenericPlayerSubsetExtractor {
     private static final String ALT_PLAYER_SIGNATURE = "ytrp|ytgh|tanN|....|gh..";
     private static final int STANDARD_SEARCH_MIN_DELTA = -1_910;
     private static final int STANDARD_SEARCH_MAX_DELTA = -450;
+    private static final int STANDARD_VALUE_BIAS = 2;
 
     private static final Map<String, Integer> STANDARD_VISIBLE_FIELDS = Map.ofEntries(
             Map.entry("crossing", -2),
@@ -229,10 +231,24 @@ public final class GenericPlayerSubsetExtractor {
 
     public static void main(String[] args) throws Exception {
         Inputs inputs = Inputs.fromArgs(args);
-        byte[] payload = loadPayload(inputs.save());
+        ExtractionResult result = extract(inputs.save());
+        String json = renderJson(result.save(), result.payloadSize(), result.likelyPlayerCount(), result.players());
+        if (inputs.output() == null) {
+            System.out.print(json);
+        } else {
+            Files.writeString(inputs.output(), json, StandardCharsets.UTF_8);
+            System.out.println("{\"save\": " + quote(result.save().toString())
+                    + ", \"output\": " + quote(inputs.output().toString())
+                    + ", \"likelyPlayers\": " + result.likelyPlayerCount()
+                    + ", \"profiledPlayers\": " + result.players().size() + "}");
+        }
+    }
+
+    public static ExtractionResult extract(Path save) throws IOException {
+        byte[] payload = loadPayload(save);
         List<PlayerCandidate> likelyPlayers = findLikelyPlayers(payload);
 
-        List<SubsetRecord> extracted = new ArrayList<>();
+        List<ExtractedPlayer> extracted = new ArrayList<>();
         for (PlayerCandidate candidate : likelyPlayers) {
             FamilyDecision initialFamily = decideFamily(payload, candidate.personPair());
             List<VariantResult> variants = new ArrayList<>(variantsForFamily(payload, candidate.personPair(), initialFamily));
@@ -250,19 +266,21 @@ public final class GenericPlayerSubsetExtractor {
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
                 continue;
             }
-            extracted.add(new SubsetRecord(candidate.id(), candidate.personPair(), candidate.extraPair(), discoverySource, effectiveFamily, initialFamily.score(), confidence, best));
+            extracted.add(new ExtractedPlayer(
+                    candidate.id(),
+                    candidate.personPair(),
+                    candidate.extraPair(),
+                    discoverySource,
+                    effectiveFamily,
+                    initialFamily.score(),
+                    confidence,
+                    best.name(),
+                    best.score(),
+                    best.invalidCount(),
+                    Collections.unmodifiableMap(new LinkedHashMap<>(best.decoded()))
+            ));
         }
-
-        String json = renderJson(inputs.save(), payload.length, likelyPlayers.size(), extracted);
-        if (inputs.output() == null) {
-            System.out.print(json);
-        } else {
-            Files.writeString(inputs.output(), json, StandardCharsets.UTF_8);
-            System.out.println("{\"save\": " + quote(inputs.save().toString())
-                    + ", \"output\": " + quote(inputs.output().toString())
-                    + ", \"likelyPlayers\": " + likelyPlayers.size()
-                    + ", \"profiledPlayers\": " + extracted.size() + "}");
-        }
+        return new ExtractionResult(save, payload.length, likelyPlayers.size(), List.copyOf(extracted));
     }
 
     private static List<PlayerCandidate> findLikelyPlayers(byte[] payload) {
@@ -462,7 +480,7 @@ public final class GenericPlayerSubsetExtractor {
     }
 
     private static InferredStandardCandidate inferStandardVisibleCandidate(byte[] payload, int personPair) {
-        InferredStandardCandidate best = null;
+        List<InferredStandardCandidate> candidates = new ArrayList<>();
         for (int delta = STANDARD_SEARCH_MIN_DELTA; delta <= STANDARD_SEARCH_MAX_DELTA; delta++) {
             int start = personPair + delta;
             if (start < 0 || start + 64 > payload.length) {
@@ -471,31 +489,20 @@ public final class GenericPlayerSubsetExtractor {
             if (!hasStandardTailMarker(payload, start)) {
                 continue;
             }
-            for (int bias = 0; bias <= 4; bias++) {
-                int plausibleCount = 0;
-                int residueTarget = (5 - bias) % 5;
-                int residueCount = 0;
-                for (int position : STANDARD_INFERENCE_POSITIONS) {
-                    int stored = payload[start + position] & 0xFF;
-                    int decoded = decodeStandardVisibleValue(stored, bias);
-                    if (decoded >= 1 && decoded <= 20) {
-                        plausibleCount++;
-                    }
-                    if (stored % 5 == residueTarget) {
-                        residueCount++;
-                    }
-                }
-                InferredStandardCandidate candidate = new InferredStandardCandidate(delta, bias, plausibleCount, residueCount);
-                if (best == null
-                        || candidate.score() > best.score()
-                        || (candidate.score() == best.score() && candidate.residueCount() > best.residueCount())
-                        || (candidate.score() == best.score() && candidate.residueCount() == best.residueCount()
-                        && candidate.startDelta() > best.startDelta())) {
-                    best = candidate;
+            int plausibleCount = 0;
+            for (int position : STANDARD_INFERENCE_POSITIONS) {
+                int stored = payload[start + position] & 0xFF;
+                int decoded = decodeStandardVisibleValue(stored, STANDARD_VALUE_BIAS);
+                if (decoded >= 1 && decoded <= 20) {
+                    plausibleCount++;
                 }
             }
+            candidates.add(new InferredStandardCandidate(delta, STANDARD_VALUE_BIAS, plausibleCount, 0));
         }
-        return best;
+        return candidates.stream()
+                .max(Comparator.comparingInt(InferredStandardCandidate::score)
+                        .thenComparingInt(InferredStandardCandidate::startDelta))
+                .orElse(null);
     }
 
     private static boolean hasStandardTailMarker(byte[] payload, int start) {
@@ -511,7 +518,7 @@ public final class GenericPlayerSubsetExtractor {
         if (stored == 0) {
             return 0;
         }
-        return Math.max(1, (stored + bias) / 5);
+        return Math.max(1, (stored + STANDARD_VALUE_BIAS) / 5);
     }
 
     private static void fillFieldFromSpecs(byte[] payload, int personPair, Map<String, Integer> merged, String field, List<Spec> specs) {
@@ -1152,7 +1159,7 @@ public final class GenericPlayerSubsetExtractor {
         return family;
     }
 
-    private static String renderJson(Path save, int payloadSize, int likelyPlayers, List<SubsetRecord> extracted) {
+    private static String renderJson(Path save, int payloadSize, int likelyPlayers, List<ExtractedPlayer> extracted) {
         StringBuilder json = new StringBuilder(1_000_000);
         long highConfidence = extracted.stream().filter(record -> record.confidence().equals("high")).count();
         long mediumConfidence = extracted.stream().filter(record -> record.confidence().equals("medium")).count();
@@ -1169,7 +1176,7 @@ public final class GenericPlayerSubsetExtractor {
         appendField(json, "veryLowConfidenceCount", Long.toString(veryLowConfidence), true);
         json.append("  \"players\": [\n");
         for (int i = 0; i < extracted.size(); i++) {
-            SubsetRecord record = extracted.get(i);
+            ExtractedPlayer record = extracted.get(i);
             json.append("    {\n");
             appendNestedField(json, "playerId", Integer.toUnsignedString(record.id()), true);
             appendNestedField(json, "personPairOffset", Integer.toString(record.personPair()), true);
@@ -1178,13 +1185,13 @@ public final class GenericPlayerSubsetExtractor {
             appendNestedField(json, "family", quote(record.family()), true);
             appendNestedField(json, "familyScore", Integer.toString(record.familyScore()), true);
             appendNestedField(json, "confidence", quote(record.confidence()), true);
-            appendNestedField(json, "layoutVariant", quote(record.variant().name()), true);
-            appendNestedField(json, "layoutScore", Integer.toString(record.variant().score()), true);
-            appendNestedField(json, "invalidFieldCount", Integer.toString(record.variant().invalidCount()), true);
+            appendNestedField(json, "layoutVariant", quote(record.layoutVariant()), true);
+            appendNestedField(json, "layoutScore", Integer.toString(record.layoutScore()), true);
+            appendNestedField(json, "invalidFieldCount", Integer.toString(record.invalidFieldCount()), true);
             json.append("      \"fields\": {\n");
             int rendered = 0;
-            for (Map.Entry<String, Integer> field : record.variant().decoded().entrySet()) {
-                appendDeepField(json, field.getKey(), field.getValue() == null ? "null" : Integer.toString(field.getValue()), rendered + 1 < record.variant().decoded().size());
+            for (Map.Entry<String, Integer> field : record.fields().entrySet()) {
+                appendDeepField(json, field.getKey(), field.getValue() == null ? "null" : Integer.toString(field.getValue()), rendered + 1 < record.fields().size());
                 rendered++;
             }
             json.append("      }\n");
@@ -1507,7 +1514,27 @@ public final class GenericPlayerSubsetExtractor {
     private record VariantResult(String name, int score, int invalidCount, Map<String, Integer> decoded) {
     }
 
-    private record SubsetRecord(int id, int personPair, int extraPair, String discoverySource, String family, int familyScore, String confidence, VariantResult variant) {
+    public record ExtractedPlayer(
+            int id,
+            int personPair,
+            int extraPair,
+            String discoverySource,
+            String family,
+            int familyScore,
+            String confidence,
+            String layoutVariant,
+            int layoutScore,
+            int invalidFieldCount,
+            Map<String, Integer> fields
+    ) {
+    }
+
+    public record ExtractionResult(
+            Path save,
+            int payloadSize,
+            int likelyPlayerCount,
+            List<ExtractedPlayer> players
+    ) {
     }
 
     private record FamilyDecision(String name, int score) {

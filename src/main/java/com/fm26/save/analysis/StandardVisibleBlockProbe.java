@@ -26,6 +26,7 @@ public final class StandardVisibleBlockProbe {
     private static final int SEARCH_MIN_DELTA = -1_910;
     private static final int SEARCH_MAX_DELTA = -450;
     private static final int BLOCK_LENGTH = 52;
+    private static final int STANDARD_VALUE_BIAS = 2;
     private static final Map<String, Integer> STANDARD_FIELDS = Map.ofEntries(
             Map.entry("finishing", 0),
             Map.entry("heading", 1),
@@ -183,7 +184,7 @@ public final class StandardVisibleBlockProbe {
     }
 
     private static InferredCandidate inferStandardCandidate(byte[] payload, int personPair) {
-        InferredCandidate best = null;
+        List<InferredCandidate> candidates = new ArrayList<>();
         for (int delta = SEARCH_MIN_DELTA; delta <= SEARCH_MAX_DELTA; delta++) {
             int start = personPair + delta;
             if (start < 0 || start + 64 > payload.length) {
@@ -192,31 +193,20 @@ public final class StandardVisibleBlockProbe {
             if (!hasStandardTailMarker(payload, start)) {
                 continue;
             }
-            for (int bias = 0; bias <= 4; bias++) {
-                int plausibleCount = 0;
-                int residueTarget = (5 - bias) % 5;
-                int residueCount = 0;
-                for (int position : STANDARD_POSITIONS) {
-                    int stored = payload[start + position] & 0xFF;
-                    int decoded = decodeStandardVisibleValue(stored, bias);
-                    if (decoded >= 1 && decoded <= 20) {
-                        plausibleCount++;
-                    }
-                    if (stored % 5 == residueTarget) {
-                        residueCount++;
-                    }
-                }
-                InferredCandidate candidate = new InferredCandidate(delta, bias, plausibleCount, residueCount);
-                if (best == null
-                        || candidate.score() > best.score()
-                        || (candidate.score() == best.score() && candidate.residueCount() > best.residueCount())
-                        || (candidate.score() == best.score() && candidate.residueCount() == best.residueCount()
-                        && candidate.startDelta() > best.startDelta())) {
-                    best = candidate;
+            int plausibleCount = 0;
+            for (int position : STANDARD_POSITIONS) {
+                int stored = payload[start + position] & 0xFF;
+                int decoded = decodeStandardVisibleValue(stored, STANDARD_VALUE_BIAS);
+                if (decoded >= 1 && decoded <= 20) {
+                    plausibleCount++;
                 }
             }
+            candidates.add(new InferredCandidate(delta, STANDARD_VALUE_BIAS, plausibleCount, 0));
         }
-        return best;
+        return candidates.stream()
+                .max(Comparator.comparingInt(InferredCandidate::score)
+                        .thenComparingInt(InferredCandidate::startDelta))
+                .orElse(null);
     }
 
     private static boolean hasStandardTailMarker(byte[] payload, int start) {
@@ -261,7 +251,7 @@ public final class StandardVisibleBlockProbe {
         if (stored == 0) {
             return 0;
         }
-        return Math.max(1, (stored + bias) / 5);
+        return Math.max(1, (stored + STANDARD_VALUE_BIAS) / 5);
     }
 
     private static byte[] loadPayload(Path path) throws IOException {
