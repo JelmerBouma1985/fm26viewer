@@ -31,6 +31,11 @@ public final class GenericPlayerSubsetExtractor {
     private static final int STANDARD_SEARCH_MIN_DELTA = -1_910;
     private static final int STANDARD_SEARCH_MAX_DELTA = -450;
     private static final int STANDARD_VALUE_BIAS = 2;
+    private static final int STANDARD_CURRENT_ABILITY_DELTA = -41;
+    private static final int STANDARD_POTENTIAL_ABILITY_DELTA = -39;
+    private static final int LOW_ANCHOR_STANDARD_START_DELTA = -1212;
+    private static final int LOW_ANCHOR_CURRENT_ABILITY_DELTA = -1253;
+    private static final int LOW_ANCHOR_POTENTIAL_ABILITY_DELTA = -1251;
 
     private static final Map<String, Integer> STANDARD_VISIBLE_FIELDS = Map.ofEntries(
             Map.entry("crossing", -2),
@@ -253,6 +258,12 @@ public final class GenericPlayerSubsetExtractor {
             FamilyDecision initialFamily = decideFamily(payload, candidate.personPair());
             List<VariantResult> variants = new ArrayList<>(variantsForFamily(payload, candidate.personPair(), initialFamily));
             variants.add(buildStandardVisibleVariant(payload, candidate.personPair()));
+            if (candidate.id() > 0 && candidate.id() < 10_000) {
+                VariantResult lowAnchorStandard = buildLowAnchorStandardVisibleVariant(payload, candidate.id());
+                if (!lowAnchorStandard.decoded().isEmpty()) {
+                    variants.add(lowAnchorStandard);
+                }
+            }
             VariantResult best = variants.stream()
                     .max(Comparator
                             .comparingInt(VariantResult::score)
@@ -451,6 +462,7 @@ public final class GenericPlayerSubsetExtractor {
     private static int variantPriority(VariantResult variant) {
         return switch (variant.name()) {
             case "standard_visible" -> 100;
+            case "standard_visible_low_anchor" -> 99;
             case "romulo" -> 60;
             case "toure", "toure_p4", "toure_p5", "toure_p7" -> 50;
             default -> 0;
@@ -462,21 +474,83 @@ public final class GenericPlayerSubsetExtractor {
         if (inferred == null) {
             return new VariantResult("standard_visible", Integer.MIN_VALUE / 4, Integer.MAX_VALUE / 4, Map.of());
         }
+        return buildStandardVisibleVariant(payload, personPair, inferred.startDelta(), inferred.bias(), inferred.score(), "standard_visible");
+    }
+
+    private static VariantResult buildLowAnchorStandardVisibleVariant(byte[] payload, int playerId) {
+        List<Integer> anchors = findDuplicatePairOffsets(payload, playerId, 0, PERSON_BLOCK_MIN_OFFSET);
+        VariantResult best = new VariantResult("standard_visible_low_anchor", Integer.MIN_VALUE / 4, Integer.MAX_VALUE / 4, Map.of());
+        for (Integer anchor : anchors) {
+            int start = anchor + LOW_ANCHOR_STANDARD_START_DELTA;
+            if (start < 2 || start + 64 > payload.length) {
+                continue;
+            }
+            int plausibleCount = 0;
+            int residueCount = 0;
+            for (int position : STANDARD_INFERENCE_POSITIONS) {
+                int stored = payload[start + position] & 0xFF;
+                int decoded = decodeStandardVisibleValue(stored, STANDARD_VALUE_BIAS);
+                if (decoded >= 1 && decoded <= 20) {
+                    plausibleCount++;
+                }
+                if (stored != 0 && stored % 5 == 4) {
+                    residueCount++;
+                }
+            }
+            VariantResult candidate = buildStandardVisibleVariant(
+                    payload,
+                    anchor,
+                    LOW_ANCHOR_STANDARD_START_DELTA,
+                    STANDARD_VALUE_BIAS,
+                    plausibleCount,
+                    "standard_visible_low_anchor"
+            );
+            candidate = new VariantResult(
+                    candidate.name(),
+                    candidate.score() + residueCount,
+                    candidate.invalidCount(),
+                    candidate.decoded()
+            );
+            if (candidate.score() > best.score()
+                    || (candidate.score() == best.score() && candidate.invalidCount() < best.invalidCount())) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static VariantResult buildStandardVisibleVariant(byte[] payload, int anchor, int startDelta, int bias, int score, String variantName) {
+        int start = anchor + startDelta;
+        if (start < 2 || start + 64 > payload.length) {
+            return new VariantResult(variantName, Integer.MIN_VALUE / 4, Integer.MAX_VALUE / 4, Map.of());
+        }
         Map<String, Integer> decoded = new LinkedHashMap<>();
-        int start = personPair + inferred.startDelta();
-        int score = inferred.score();
         int invalidCount = 0;
         List<Map.Entry<String, Integer>> entries = new ArrayList<>(STANDARD_VISIBLE_FIELDS.entrySet());
         entries.sort(Comparator.comparingInt(Map.Entry::getValue));
         for (Map.Entry<String, Integer> entry : entries) {
             int stored = payload[start + entry.getValue()] & 0xFF;
-            int value = decodeStandardVisibleValue(stored, inferred.bias());
+            int value = decodeStandardVisibleValue(stored, bias);
             decoded.put(entry.getKey(), value);
             if (!plausible(entry.getKey(), value)) {
                 invalidCount++;
             }
         }
-        return new VariantResult("standard_visible", score, invalidCount, decoded);
+        int currentAbilityOffset = variantName.equals("standard_visible_low_anchor")
+                ? anchor + LOW_ANCHOR_CURRENT_ABILITY_DELTA
+                : start + STANDARD_CURRENT_ABILITY_DELTA;
+        int potentialAbilityOffset = variantName.equals("standard_visible_low_anchor")
+                ? anchor + LOW_ANCHOR_POTENTIAL_ABILITY_DELTA
+                : start + STANDARD_POTENTIAL_ABILITY_DELTA;
+        Integer currentAbility = Enc.U16LE.decodeValue(payload, currentAbilityOffset);
+        Integer potentialAbility = Enc.U16LE.decodeValue(payload, potentialAbilityOffset);
+        if (plausible("current_ability", currentAbility)) {
+            decoded.put("current_ability", currentAbility);
+        }
+        if (plausible("potential_ability", potentialAbility)) {
+            decoded.put("potential_ability", potentialAbility);
+        }
+        return new VariantResult(variantName, score, invalidCount, decoded);
     }
 
     private static InferredStandardCandidate inferStandardVisibleCandidate(byte[] payload, int personPair) {
@@ -820,7 +894,7 @@ public final class GenericPlayerSubsetExtractor {
             return false;
         }
         return switch (field) {
-            case "potential_ability" -> value >= 1 && value <= 200;
+            case "current_ability", "potential_ability" -> value >= 1 && value <= 200;
             case "striker", "controversy", "defensive_midfielder" -> value >= 0 && value <= 20;
             case "ambition", "versatility", "temperament" -> value >= 1 && value <= 20;
             default -> value >= 1 && value <= 20;
@@ -1123,7 +1197,8 @@ public final class GenericPlayerSubsetExtractor {
     }
 
     private static String promoteFamily(String family, VariantResult best) {
-        if (best.name().equals("standard_visible") && best.score() >= 30 && best.invalidCount() == 0) {
+        if ((best.name().equals("standard_visible") || best.name().equals("standard_visible_low_anchor"))
+                && best.score() >= 30 && best.invalidCount() == 0) {
             return "standard_visible";
         }
         if (!family.equals("unknown")) {
@@ -1157,6 +1232,22 @@ public final class GenericPlayerSubsetExtractor {
             return "kooistra_local";
         }
         return family;
+    }
+
+    private static List<Integer> findDuplicatePairOffsets(byte[] payload, int playerId, int minOffsetInclusive, int maxOffsetExclusive) {
+        if (maxOffsetExclusive > payload.length - 8) {
+            maxOffsetExclusive = payload.length - 8;
+        }
+        if (minOffsetInclusive < 0) {
+            minOffsetInclusive = 0;
+        }
+        List<Integer> offsets = new ArrayList<>();
+        for (int offset = minOffsetInclusive; offset < maxOffsetExclusive; offset++) {
+            if (u32le(payload, offset) == playerId && u32le(payload, offset + DUP_PAIR_DISTANCE) == playerId) {
+                offsets.add(offset);
+            }
+        }
+        return offsets;
     }
 
     private static String renderJson(Path save, int payloadSize, int likelyPlayers, List<ExtractedPlayer> extracted) {
