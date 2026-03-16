@@ -274,6 +274,9 @@ public final class GenericPlayerSubsetExtractor {
             String effectiveFamily = promoteFamily(initialFamily.name(), best);
             String discoverySource = discoverySource(candidate);
             String confidence = confidenceFor(discoverySource, effectiveFamily, best);
+            if (missingAbilityWindow(best)) {
+                continue;
+            }
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
                 continue;
             }
@@ -1467,6 +1470,11 @@ public final class GenericPlayerSubsetExtractor {
                 && variant.score() <= 17
                 && variant.invalidCount() >= 18
                 && !hasValidPersonPreamble(payload, personPair);
+    }
+
+    private static boolean missingAbilityWindow(VariantResult variant) {
+        return variant.decoded().get("current_ability") == null
+                && variant.decoded().get("potential_ability") == null;
     }
 
     private static int bestLocalPlayerScore(byte[] payload, int personPair) {
