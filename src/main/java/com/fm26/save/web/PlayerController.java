@@ -27,7 +27,7 @@ public class PlayerController {
             @RequestParam(defaultValue = "0") int offset
     ) {
         return jdbcTemplate.query("""
-                select player_id, family, confidence, layout_variant, layout_score, invalid_field_count
+                select player_id, first_name, last_name, full_name, family, confidence, layout_variant, layout_score, invalid_field_count
                 from players
                 order by player_id
                 limit ? offset ?
@@ -35,6 +35,9 @@ public class PlayerController {
                 (rs, rowNum) -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("playerId", rs.getLong("player_id"));
+                    row.put("firstName", rs.getString("first_name"));
+                    row.put("lastName", rs.getString("last_name"));
+                    row.put("fullName", rs.getString("full_name"));
                     row.put("family", rs.getString("family"));
                     row.put("confidence", rs.getString("confidence"));
                     row.put("layoutVariant", rs.getString("layout_variant"));
@@ -50,7 +53,7 @@ public class PlayerController {
     @GetMapping("/{playerId}")
     public Map<String, Object> getPlayer(@PathVariable long playerId) {
         Map<String, Object> player = jdbcTemplate.queryForObject("""
-                select player_id, person_pair_offset, extra_pair_offset, discovery_source, family,
+                select player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name, discovery_source, family,
                        family_score, confidence, layout_variant, layout_score, invalid_field_count
                 from players
                 where player_id = ?
@@ -60,6 +63,9 @@ public class PlayerController {
                     row.put("playerId", rs.getLong("player_id"));
                     row.put("personPairOffset", rs.getInt("person_pair_offset"));
                     row.put("extraPairOffset", rs.getInt("extra_pair_offset"));
+                    row.put("firstName", rs.getString("first_name"));
+                    row.put("lastName", rs.getString("last_name"));
+                    row.put("fullName", rs.getString("full_name"));
                     row.put("discoverySource", rs.getString("discovery_source"));
                     row.put("family", rs.getString("family"));
                     row.put("familyScore", rs.getInt("family_score"));

@@ -38,6 +38,9 @@ public class PlayerImportService {
     }
 
     private void replaceDatabaseContents(List<ExtractedPlayer> players) {
+        jdbcTemplate.update("alter table players add column if not exists first_name varchar(255)");
+        jdbcTemplate.update("alter table players add column if not exists last_name varchar(255)");
+        jdbcTemplate.update("alter table players add column if not exists full_name varchar(512)");
         jdbcTemplate.update("delete from player_fields");
         jdbcTemplate.update("delete from players");
 
@@ -48,6 +51,9 @@ public class PlayerImportService {
                     Integer.toUnsignedLong(player.id()),
                     player.personPair(),
                     player.extraPair(),
+                    player.firstName(),
+                    player.lastName(),
+                    player.fullName(),
                     player.discoverySource(),
                     player.family(),
                     player.familyScore(),
@@ -67,9 +73,9 @@ public class PlayerImportService {
 
         jdbcTemplate.batchUpdate("""
                 insert into players (
-                    player_id, person_pair_offset, extra_pair_offset, discovery_source, family,
+                    player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name, discovery_source, family,
                     family_score, confidence, layout_variant, layout_score, invalid_field_count
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, playerRows);
 
         jdbcTemplate.batchUpdate("""
