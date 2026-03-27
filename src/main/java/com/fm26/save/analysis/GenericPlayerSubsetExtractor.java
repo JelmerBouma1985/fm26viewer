@@ -316,8 +316,7 @@ public final class GenericPlayerSubsetExtractor {
                     resolvedName = lowAnchorResolved;
                 }
             }
-            if (missingAbilityWindow(best)
-                    && (resolvedName.fullName() == null || resolvedName.fullName().isBlank())) {
+            if (missingAbilityWindow(best)) {
                 continue;
             }
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
