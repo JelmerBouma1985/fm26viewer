@@ -62,6 +62,13 @@ public final class NameResolverDebugProbe {
         scoreDelta.setAccessible(true);
         Method decodeInlineName = extractor.getDeclaredMethod("decodeInlineName", byte[].class, int.class);
         decodeInlineName.setAccessible(true);
+        Method isKnownNameDelta = extractor.getDeclaredMethod("isKnownNameDelta", int.class);
+        isKnownNameDelta.setAccessible(true);
+        Class<?> namePairCandidateClass = Class.forName("com.fm26.save.analysis.GenericPlayerSubsetExtractor$NamePairCandidate");
+        var namePairCtor = namePairCandidateClass.getDeclaredConstructor(int.class, int.class, String.class, int.class, String.class, String.class, String.class, int.class);
+        namePairCtor.setAccessible(true);
+        Method isValidFullPairCandidate = extractor.getDeclaredMethod("isValidFullPairCandidate", namePairCandidateClass);
+        isValidFullPairCandidate.setAccessible(true);
 
         for (int i = 1; i < args.length; i++) {
             int playerId = Integer.parseInt(args[i]);
@@ -155,9 +162,21 @@ public final class NameResolverDebugProbe {
                     }
                 }
                 if (score >= 70) {
+                    Object candidateRecord = namePairCtor.newInstance(
+                            delta,
+                            firstNameId,
+                            first == null ? null : scoredValueMethod.invoke(first),
+                            lastNameId,
+                            last == null ? null : scoredValueMethod.invoke(last),
+                            common == null ? null : scoredValueMethod.invoke(common),
+                            inline,
+                            score
+                    );
                     System.out.println(
                             "  candidate delta=" + delta
                                     + " score=" + score
+                                    + " known=" + isKnownNameDelta.invoke(null, delta)
+                                    + " validFullPair=" + isValidFullPairCandidate.invoke(null, candidateRecord)
                                     + " first=" + (first == null ? null : scoredValueMethod.invoke(first))
                                     + " last=" + (last == null ? null : scoredValueMethod.invoke(last))
                                     + " common=" + (common == null ? null : scoredValueMethod.invoke(common))

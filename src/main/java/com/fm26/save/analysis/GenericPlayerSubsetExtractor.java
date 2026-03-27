@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -18,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 public final class GenericPlayerSubsetExtractor {
 
@@ -43,10 +45,12 @@ public final class GenericPlayerSubsetExtractor {
     private static final int LAST_NAME_TABLE_MAX_OFFSET = 63_300_000;
     private static final int COMMON_NAME_TABLE_MIN_OFFSET = 63_500_000;
     private static final int COMMON_NAME_TABLE_MAX_OFFSET = 66_000_000;
+    private static final int EARLY_COMMON_NAME_TABLE_MIN_OFFSET = 63_200_000;
+    private static final int EARLY_COMMON_NAME_TABLE_MAX_OFFSET = 63_220_000;
     private static final int NAME_SEARCH_MIN_DELTA = -2_500;
     private static final int NAME_SEARCH_MAX_DELTA = -100;
     private static final int NAME_PAIR_DISTANCE = 5;
-    private static final int[] KNOWN_NAME_DELTAS = {-688, -665, -660, -658, -657, -654, -652, -651, -640, -625, -621, -620, -606, -562, -548, -544, -539, -529, -515, -514, -506, -501, -476, -465, -461, -460, -459, -454, -453, -444, -436, -432, -429, -426, -425, -422, -408, -397, -396, -395, -388, -381, -373, -370, -368, -366, -365, -364, -358, -357, -356, -354, -353, -349, -344, -343, -341, -340, -339, -338, -336, -334, -333, -332, -331, -327, -325, -319, -318, -317, -315, -314, -313, -312, -311, -310, -309, -308, -307, -306, -305, -304, -301, -299, -298, -295, -294, -292, -290, -285, -283, -282, -281, -280, -278, -276, -275, -274, -271, -269, -268, -267, -266, -265, -261, -260, -259, -255, -254, -253, -252, -250, -248, -247, -246, -245, -244, -239, -238, -237, -236, -234, -232, -231, -230, -229, -225, -223, -222, -221, -215, -214, -213, -211, -210, -208, -207, -206, -205, -200, -199, -197, -195, -194, -191, -190, -188, -184, -183, -181, -178, -176, -175, -174, -168, -167, -157, -152, -151, -146, -144, -143, -140, -136, -135, -131, -130, -129, -127, -126, -115, -111};
+    private static final int[] KNOWN_NAME_DELTAS = IntStream.rangeClosed(-700, -100).toArray();
 
     private static final Map<String, Integer> STANDARD_VISIBLE_FIELDS = Map.ofEntries(
             Map.entry("crossing", -2),
@@ -286,19 +290,38 @@ public final class GenericPlayerSubsetExtractor {
             String effectiveFamily = promoteFamily(initialFamily.name(), best);
             String discoverySource = discoverySource(candidate);
             String confidence = confidenceFor(discoverySource, effectiveFamily, best);
-            if (missingAbilityWindow(best)) {
+            ResolvedName resolvedName = resolveName(payload, candidate.personPair(), nameTables);
+            if (resolvedName.fullName() == null || resolvedName.fullName().isBlank()) {
+                ResolvedName strongCommonResolved = resolveStrongCommonTripleFallback(payload, candidate.personPair(), nameTables);
+                if (strongCommonResolved.fullName() != null
+                        && !strongCommonResolved.fullName().isBlank()
+                        && !strongCommonResolved.fullName().contains(" ")) {
+                    resolvedName = strongCommonResolved;
+                }
+            }
+            if (resolvedName.fullName() == null || resolvedName.fullName().isBlank()) {
+                ResolvedName strongPairResolved = resolveStrongKnownPairFallback(payload, candidate.personPair(), nameTables);
+                if (strongPairResolved.fullName() != null && !strongPairResolved.fullName().isBlank()) {
+                    resolvedName = strongPairResolved;
+                }
+            }
+            if ("standard_visible_low_anchor".equals(best.name())) {
+                ResolvedName lowAnchorResolved = resolveLowAnchorInlineName(payload, candidate.id(), nameTables);
+                if (lowAnchorResolved.fullName() != null
+                        && !lowAnchorResolved.fullName().isBlank()
+                        && (resolvedName.fullName() == null
+                        || resolvedName.fullName().isBlank()
+                        || resolvedName.lastName() == null
+                        || !lowAnchorResolved.fullName().equals(resolvedName.fullName()))) {
+                    resolvedName = lowAnchorResolved;
+                }
+            }
+            if (missingAbilityWindow(best)
+                    && (resolvedName.fullName() == null || resolvedName.fullName().isBlank())) {
                 continue;
             }
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
                 continue;
-            }
-            ResolvedName resolvedName = resolveName(payload, candidate.personPair(), nameTables);
-            if ((resolvedName.fullName() == null || resolvedName.fullName().isBlank())
-                    && "standard_visible_low_anchor".equals(best.name())) {
-                ResolvedName lowAnchorResolved = resolveLowAnchorInlineName(payload, candidate.id(), nameTables);
-                if (lowAnchorResolved.fullName() != null && !lowAnchorResolved.fullName().isBlank()) {
-                    resolvedName = lowAnchorResolved;
-                }
             }
             extracted.add(new ExtractedPlayer(
                     candidate.id(),
@@ -348,7 +371,8 @@ public final class GenericPlayerSubsetExtractor {
             }
             boolean acceptedByExtra = buckets.extraPair != null
                     && hasPlayerExtraShape(payload, buckets.personPair, buckets.extraPair);
-            boolean acceptedByPreamble = hasStrongPlayerPreamble(payload, buckets.personPair);
+            boolean acceptedByPreamble = hasStrongPlayerPreamble(payload, buckets.personPair)
+                    || hasWeakStandardPlayerShape(payload, buckets.personPair);
             if (!acceptedByExtra && !acceptedByPreamble) {
                 continue;
             }
@@ -1410,10 +1434,10 @@ public final class GenericPlayerSubsetExtractor {
         if (start < 0 || personPair + 8 > payload.length) {
             return false;
         }
-        return (payload[start] == 0x00 || payload[start] == 0x01)
+        return (payload[start] == 0x00 || payload[start] == 0x01 || payload[start] == 0x04)
                 && payload[start + 1] == 0x02
                 && payload[start + 2] == 0x40
-                && (payload[start + 3] == 0x10 || payload[start + 3] == 0x18)
+                && (payload[start + 3] == 0x10 || payload[start + 3] == 0x12 || payload[start + 3] == 0x18)
                 && (payload[start + 4] == 0x04 || payload[start + 4] == 0x05)
                 && payload[start + 5] == 0x00
                 && payload[start + 6] == 0x00
@@ -1425,11 +1449,43 @@ public final class GenericPlayerSubsetExtractor {
         if (start < 0 || personPair + 8 > payload.length) {
             return false;
         }
-        return (payload[start] == 0x00 || payload[start] == 0x01)
+        return (payload[start] == 0x00 || payload[start] == 0x01 || payload[start] == 0x04)
                 && payload[start + 1] == 0x02
                 && (payload[start + 2] == 0x00 || payload[start + 2] == 0x40)
-                && (payload[start + 3] == 0x10 || payload[start + 3] == 0x18)
+                && (payload[start + 3] == 0x10 || payload[start + 3] == 0x12 || payload[start + 3] == 0x18)
                 && (payload[start + 4] == 0x04 || payload[start + 4] == 0x05)
+                && payload[start + 5] == 0x00
+                && payload[start + 6] == 0x00
+                && payload[start + 7] == 0x00;
+    }
+
+    private static boolean hasWeakStandardPlayerShape(byte[] payload, int personPair) {
+        if (!hasWeakStandardPersonPreamble(payload, personPair) || hasStrongPlayerPreamble(payload, personPair)) {
+            return false;
+        }
+        InferredStandardCandidate inferred = inferStandardVisibleCandidate(payload, personPair);
+        if (inferred == null || inferred.score() < STANDARD_INFERENCE_POSITIONS.length) {
+            return false;
+        }
+        int start = personPair + inferred.startDelta();
+        if (start < 2 || start + 64 > payload.length) {
+            return false;
+        }
+        Integer currentAbility = Enc.U16LE.decodeValue(payload, start + STANDARD_CURRENT_ABILITY_DELTA);
+        Integer potentialAbility = Enc.U16LE.decodeValue(payload, start + STANDARD_POTENTIAL_ABILITY_DELTA);
+        return plausible("current_ability", currentAbility) && plausible("potential_ability", potentialAbility);
+    }
+
+    private static boolean hasWeakStandardPersonPreamble(byte[] payload, int personPair) {
+        int start = personPair - 12;
+        if (start < 0 || personPair + 8 > payload.length) {
+            return false;
+        }
+        return payload[start] == 0x00
+                && payload[start + 1] == 0x02
+                && payload[start + 2] == 0x40
+                && payload[start + 3] == 0x10
+                && (payload[start + 4] == 0x00 || payload[start + 4] == 0x01)
                 && payload[start + 5] == 0x00
                 && payload[start + 6] == 0x00
                 && payload[start + 7] == 0x00;
@@ -1610,10 +1666,14 @@ public final class GenericPlayerSubsetExtractor {
         Map<Integer, ScoredString> firstNames = new HashMap<>();
         Map<Integer, ScoredString> lastNames = new HashMap<>();
         Map<Integer, ScoredString> commonNames = new HashMap<>();
+        Map<Integer, ScoredString> earlyCommonNames = new HashMap<>();
+        Map<Integer, ScoredString> looseLastNames = new HashMap<>();
         buildNameTable(payload, FIRST_NAME_TABLE_MIN_OFFSET, FIRST_NAME_TABLE_MAX_OFFSET, firstNames, true);
         buildNameTable(payload, LAST_NAME_TABLE_MIN_OFFSET, LAST_NAME_TABLE_MAX_OFFSET, lastNames, false);
         buildNameTable(payload, COMMON_NAME_TABLE_MIN_OFFSET, COMMON_NAME_TABLE_MAX_OFFSET, commonNames, true);
-        return new NameTables(firstNames, lastNames, commonNames);
+        buildLooseNameTable(payload, EARLY_COMMON_NAME_TABLE_MIN_OFFSET, EARLY_COMMON_NAME_TABLE_MAX_OFFSET, earlyCommonNames, true);
+        buildLooseNameTable(payload, LAST_NAME_TABLE_MIN_OFFSET, LAST_NAME_TABLE_MAX_OFFSET, looseLastNames, false);
+        return new NameTables(firstNames, lastNames, commonNames, earlyCommonNames, looseLastNames);
     }
 
     private static void buildNameTable(byte[] payload, int minOffset, int maxOffset, Map<Integer, ScoredString> target, boolean firstName) {
@@ -1652,10 +1712,39 @@ public final class GenericPlayerSubsetExtractor {
         }
     }
 
+    private static void buildLooseNameTable(byte[] payload, int minOffset, int maxOffset, Map<Integer, ScoredString> target, boolean firstName) {
+        int start = Math.max(0, minOffset);
+        int end = Math.min(payload.length - 8, maxOffset);
+        for (int offset = start; offset < end; offset++) {
+            int stringId = u32le(payload, offset);
+            int length = u32le(payload, offset + 4);
+            if (stringId <= 0 || length <= 0 || length > 64 || offset + 8 + length > payload.length) {
+                continue;
+            }
+            String decoded = decodeCandidateString(payload, offset + 8, length);
+            if (decoded == null) {
+                continue;
+            }
+            int score = scoreName(decoded, firstName);
+            if (score < 0) {
+                continue;
+            }
+            if (!firstName) {
+                score += looseLastNameBias(decoded);
+            }
+            ScoredString current = target.get(stringId);
+            if (current == null || score > current.score()) {
+                target.put(stringId, new ScoredString(decoded, score));
+            }
+        }
+    }
+
     private static ResolvedName resolveName(byte[] payload, int personPair, NameTables tables) {
         NamePairCandidate best = null;
         NamePairCandidate second = null;
         NamePairCandidate bestKnownFullPair = null;
+        NamePairCandidate bestInlineFullPair = null;
+        NamePairCandidate bestCommonTriple = null;
         for (int delta = NAME_SEARCH_MIN_DELTA; delta <= NAME_SEARCH_MAX_DELTA; delta++) {
             int firstOffset = personPair + delta;
             int lastOffset = firstOffset + NAME_PAIR_DISTANCE;
@@ -1669,8 +1758,20 @@ public final class GenericPlayerSubsetExtractor {
             int lastNameId = u32le(payload, lastOffset);
             ScoredString first = tables.firstNames().get(firstNameId);
             ScoredString last = tables.lastNames().get(lastNameId);
+            ScoredString looseLast = tables.looseLastNames().get(lastNameId);
+            if (preferLooseLastName(last == null ? null : last.value(), looseLast == null ? null : looseLast.value())) {
+                last = looseLast;
+            }
             int commonNameId = u32le(payload, firstOffset + 10);
             ScoredString common = commonNameId == -1 ? null : tables.commonNames().get(commonNameId);
+            boolean earlyCommonMatched = false;
+            if (common == null && first != null && last != null && commonNameId != -1) {
+                ScoredString earlyCommon = tables.earlyCommonNames().get(commonNameId);
+                if (earlyCommon != null && hasCoherentEarlyCommon(first.value(), last.value(), earlyCommon.value())) {
+                    common = earlyCommon;
+                    earlyCommonMatched = true;
+                }
+            }
             if ((first == null || last == null) && common == null) {
                 continue;
             }
@@ -1687,6 +1788,9 @@ public final class GenericPlayerSubsetExtractor {
             } else if (commonNameId == -1) {
                 score += 3;
             }
+            if (earlyCommonMatched) {
+                score += 28;
+            }
             if (first != null && last != null && common != null) {
                 String firstValue = first.value();
                 String commonValue = common.value();
@@ -1700,7 +1804,7 @@ public final class GenericPlayerSubsetExtractor {
                     && (payload[firstOffset + 11] & 0xFF) == 0xFF
                     && (payload[firstOffset + 12] & 0xFF) == 0xFF
                     && (payload[firstOffset + 13] & 0xFF) == 0xFF) {
-                score += 8;
+                score += 32;
             }
             if ((payload[firstOffset + 9] & 0xFF) == 0) {
                 score += 3;
@@ -1735,8 +1839,18 @@ public final class GenericPlayerSubsetExtractor {
                     inline,
                     score);
             if (isValidFullPairCandidate(candidate)) {
-                if (bestKnownFullPair == null || fullPairQuality(candidate) > fullPairQuality(bestKnownFullPair)) {
+                if (bestKnownFullPair == null || isBetterFullPairCandidate(candidate, bestKnownFullPair)) {
                     bestKnownFullPair = candidate;
+                }
+            }
+            if (hasInlineFullPair(candidate)) {
+                if (bestInlineFullPair == null || isBetterFullPairCandidate(candidate, bestInlineFullPair)) {
+                    bestInlineFullPair = candidate;
+                }
+            }
+            if (hasCommonTriple(candidate) && isKnownNameDelta(candidate.delta()) && hasCoherentCommonDisplay(candidate)) {
+                if (bestCommonTriple == null || isBetterFullPairCandidate(candidate, bestCommonTriple)) {
+                    bestCommonTriple = candidate;
                 }
             }
             if (best == null || candidate.score() > best.score()) {
@@ -1749,14 +1863,59 @@ public final class GenericPlayerSubsetExtractor {
         if (best == null) {
             return new ResolvedName(null, null, null);
         }
+        if (bestKnownFullPair != null && fullPairQuality(bestKnownFullPair) >= 126) {
+            best = bestKnownFullPair;
+        }
+        if (bestKnownFullPair != null
+                && best != null
+                && !isValidFullPairCandidate(best)
+                && (best.commonName() == null || !hasCoherentCommonDisplay(best))
+                && fullPairQuality(bestKnownFullPair) >= fullPairQuality(best) - 12) {
+            best = bestKnownFullPair;
+        }
+        if (bestInlineFullPair != null
+                && fullPairQuality(bestInlineFullPair) >= fullPairQuality(best) - 40
+                && (best.firstName() == null
+                || best.lastName() == null
+                || best.inlineName() == null
+                || (best.commonName() != null && !hasInlineFullPair(best)))) {
+            best = bestInlineFullPair;
+        }
+        if (bestInlineFullPair != null
+                && fullPairQuality(bestInlineFullPair) >= fullPairQuality(best) + 8) {
+            best = bestInlineFullPair;
+        }
+        if (bestCommonTriple != null
+                && fullPairQuality(bestCommonTriple) >= fullPairQuality(best) - 12
+                && (best.firstName() == null
+                || best.lastName() == null
+                || (best.commonName() != null && !hasCommonTriple(best)))) {
+            best = bestCommonTriple;
+        }
+        if (bestCommonTriple != null
+                && hasStrongCommonOverride(bestCommonTriple)
+                && bestKnownFullPair != null
+                && bestKnownFullPair.commonName() == null
+                && fullPairQuality(bestCommonTriple) >= fullPairQuality(bestKnownFullPair) - 12) {
+            best = bestCommonTriple;
+        }
         if ((best.firstName() == null || best.lastName() == null)
                 && bestKnownFullPair != null
-                && best.score() - bestKnownFullPair.score() <= 16) {
+                && best.score() - bestKnownFullPair.score() <= 40) {
+            best = bestKnownFullPair;
+        }
+        if (bestKnownFullPair != null
+                && (best.firstName() == null
+                || best.lastName() == null
+                || (!isValidFullPairCandidate(best)
+                && (best.commonName() == null || !hasCoherentCommonDisplay(best))))
+                && fullPairQuality(bestKnownFullPair) >= fullPairQuality(best) - 16) {
             best = bestKnownFullPair;
         }
         if (best.commonName() != null
                 && bestKnownFullPair != null
-                && bestKnownFullPair.score() >= best.score() - 8) {
+                && !hasCommonTriple(best)
+                && bestKnownFullPair.score() >= best.score() - 24) {
             best = bestKnownFullPair;
         }
         if ((best.firstName() == null || best.lastName() == null) && second != null
@@ -1774,6 +1933,189 @@ public final class GenericPlayerSubsetExtractor {
         if (best.score() < 0) {
             return new ResolvedName(null, null, null);
         }
+        String fullName = renderFullName(best);
+        if ((best.firstName() == null || best.lastName() == null || fullName == null || fullName.isBlank())
+                && bestKnownFullPair != null) {
+            best = bestKnownFullPair;
+            fullName = renderFullName(best);
+        }
+        return new ResolvedName(best.firstName(), best.lastName(), fullName);
+    }
+
+    private static ResolvedName resolveStrongKnownPairFallback(byte[] payload, int personPair, NameTables tables) {
+        NamePairCandidate best = null;
+        for (int delta = NAME_SEARCH_MIN_DELTA; delta <= NAME_SEARCH_MAX_DELTA; delta++) {
+            int firstOffset = personPair + delta;
+            int lastOffset = firstOffset + NAME_PAIR_DISTANCE;
+            if (firstOffset < 0 || lastOffset + 13 > payload.length) {
+                continue;
+            }
+            if ((payload[firstOffset + 4] & 0xFF) != 0) {
+                continue;
+            }
+            int firstNameId = u32le(payload, firstOffset);
+            int lastNameId = u32le(payload, lastOffset);
+            ScoredString first = tables.firstNames().get(firstNameId);
+            ScoredString last = tables.lastNames().get(lastNameId);
+            ScoredString looseLast = tables.looseLastNames().get(lastNameId);
+            if (preferLooseLastName(last == null ? null : last.value(), looseLast == null ? null : looseLast.value())) {
+                last = looseLast;
+            }
+            if (first == null || last == null) {
+                continue;
+            }
+            int commonNameId = u32le(payload, firstOffset + 10);
+            ScoredString common = commonNameId == -1 ? null : tables.commonNames().get(commonNameId);
+            boolean earlyCommonMatched = false;
+            if (common == null && first != null && last != null && commonNameId != -1) {
+                ScoredString earlyCommon = tables.earlyCommonNames().get(commonNameId);
+                if (earlyCommon != null && hasCoherentEarlyCommon(first.value(), last.value(), earlyCommon.value())) {
+                    common = earlyCommon;
+                    earlyCommonMatched = true;
+                }
+            }
+            String inline = decodeInlineName(payload, firstOffset);
+            int score = scoreDelta(delta) + first.score() + last.score();
+            if (common != null) {
+                score += 20;
+            } else if (commonNameId == -1) {
+                score += 3;
+            }
+            if (earlyCommonMatched) {
+                score += 28;
+            }
+            if ((payload[firstOffset + 10] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 11] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 12] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 13] & 0xFF) == 0xFF) {
+                score += 32;
+            }
+            if ((payload[firstOffset + 9] & 0xFF) == 0) {
+                score += 3;
+            }
+            if ((payload[firstOffset + 14] & 0xFF) == 0) {
+                score += 3;
+            }
+            if ((payload[firstOffset + 16] & 0xFF) == 0
+                    && (payload[firstOffset + 17] & 0xFF) == 0
+                    && (payload[firstOffset + 18] & 0xFF) == 0) {
+                score += 3;
+            }
+            if (inline != null) {
+                score += 10;
+                if (inline.contains(first.value())) {
+                    score += 10;
+                }
+                if (inline.contains(last.value())) {
+                    score += 10;
+                }
+            }
+            NamePairCandidate candidate = new NamePairCandidate(
+                    delta,
+                    firstNameId,
+                    first.value(),
+                    lastNameId,
+                    last.value(),
+                    common == null ? null : common.value(),
+                    inline,
+                    score
+            );
+            if (!isValidFullPairCandidate(candidate)) {
+                continue;
+            }
+            if (best == null || isBetterFullPairCandidate(candidate, best)) {
+                best = candidate;
+            }
+        }
+        if (best == null) {
+            return new ResolvedName(null, null, null);
+        }
+        return new ResolvedName(best.firstName(), best.lastName(), renderFullName(best));
+    }
+
+    private static ResolvedName resolveStrongCommonTripleFallback(byte[] payload, int personPair, NameTables tables) {
+        NamePairCandidate best = null;
+        for (int delta = NAME_SEARCH_MIN_DELTA; delta <= NAME_SEARCH_MAX_DELTA; delta++) {
+            int firstOffset = personPair + delta;
+            int lastOffset = firstOffset + NAME_PAIR_DISTANCE;
+            if (firstOffset < 0 || lastOffset + 13 > payload.length) {
+                continue;
+            }
+            if ((payload[firstOffset + 4] & 0xFF) != 0) {
+                continue;
+            }
+            int firstNameId = u32le(payload, firstOffset);
+            int lastNameId = u32le(payload, lastOffset);
+            int commonNameId = u32le(payload, firstOffset + 10);
+            ScoredString first = tables.firstNames().get(firstNameId);
+            ScoredString last = tables.lastNames().get(lastNameId);
+            ScoredString looseLast = tables.looseLastNames().get(lastNameId);
+            if (preferLooseLastName(last == null ? null : last.value(), looseLast == null ? null : looseLast.value())) {
+                last = looseLast;
+            }
+            ScoredString common = commonNameId == -1 ? null : tables.commonNames().get(commonNameId);
+            if (first == null || last == null || common == null) {
+                continue;
+            }
+            String inline = decodeInlineName(payload, firstOffset);
+            int score = scoreDelta(delta) + first.score() + last.score() + 20;
+            String firstValue = first.value();
+            String commonValue = common.value();
+            if (commonValue.equals(firstValue)
+                    || firstValue.startsWith(commonValue + " ")
+                    || commonValue.startsWith(firstValue + " ")) {
+                score += 48;
+            }
+            if ((payload[firstOffset + 10] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 11] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 12] & 0xFF) == 0xFF
+                    && (payload[firstOffset + 13] & 0xFF) == 0xFF) {
+                score += 32;
+            }
+            if ((payload[firstOffset + 9] & 0xFF) == 0) {
+                score += 3;
+            }
+            if ((payload[firstOffset + 14] & 0xFF) == 0) {
+                score += 3;
+            }
+            if ((payload[firstOffset + 16] & 0xFF) == 0
+                    && (payload[firstOffset + 17] & 0xFF) == 0
+                    && (payload[firstOffset + 18] & 0xFF) == 0) {
+                score += 3;
+            }
+            if (inline != null) {
+                score += 10;
+                if (inline.contains(firstValue)) {
+                    score += 10;
+                }
+                if (inline.contains(last.value())) {
+                    score += 10;
+                }
+            }
+            NamePairCandidate candidate = new NamePairCandidate(
+                    delta,
+                    firstNameId,
+                    firstValue,
+                    lastNameId,
+                    last.value(),
+                    commonValue,
+                    inline,
+                    score
+            );
+            if (!hasCommonTriple(candidate) || !isKnownNameDelta(candidate.delta())) {
+                continue;
+            }
+            if (best == null || isBetterFullPairCandidate(candidate, best)) {
+                best = candidate;
+            }
+        }
+        if (best == null) {
+            return new ResolvedName(null, null, null);
+        }
+        return new ResolvedName(best.firstName(), best.lastName(), renderFullName(best));
+    }
+
+    private static String renderFullName(NamePairCandidate best) {
         String fullName = best.commonName();
         if (fullName == null || fullName.isBlank()) {
             String firstLast = ((best.firstName() == null ? "" : best.firstName()) + " "
@@ -1783,7 +2125,25 @@ public final class GenericPlayerSubsetExtractor {
         if ((fullName == null || fullName.isBlank()) && best.inlineName() != null && !best.inlineName().isBlank()) {
             fullName = best.inlineName();
         }
-        return new ResolvedName(best.firstName(), best.lastName(), fullName);
+        if (best.inlineName() != null && best.firstName() != null && best.lastName() != null) {
+            String eastAsianOrder = best.lastName() + " " + best.firstName();
+            String inlineBase = best.inlineName().split("\\(", 2)[0].trim();
+            if (inlineBase.startsWith(eastAsianOrder) && inlineBase.split("\\s+").length <= 2) {
+                fullName = best.inlineName().split("\\(", 2)[0].trim();
+            }
+            String quotedAliasBase = inlineBase.split("'", 2)[0].trim();
+            if (!best.lastName().startsWith("'")
+                    && inlineBase.contains("'")
+                    && quotedAliasBase.startsWith(best.firstName() + " ")
+                    && !normalizedContains(quotedAliasBase, best.lastName())) {
+                String[] parts = quotedAliasBase.split("\\s+");
+                if (parts.length >= 2) {
+                    String derivedLast = parts[1];
+                    return best.firstName() + " " + derivedLast;
+                }
+            }
+        }
+        return fullName;
     }
 
     private static ResolvedName resolveLowAnchorInlineName(byte[] payload, int playerId, NameTables tables) {
@@ -1875,34 +2235,152 @@ public final class GenericPlayerSubsetExtractor {
         }
         if (candidate.commonName() == null) {
             return candidate.inlineName() == null
-                    || (candidate.inlineName().contains(candidate.firstName())
-                    && candidate.inlineName().contains(candidate.lastName()));
+                    || (normalizedContains(candidate.inlineName(), candidate.firstName())
+                    && normalizedContains(candidate.inlineName(), candidate.lastName()));
         }
-        String first = candidate.firstName();
-        String common = candidate.commonName();
-        if (common.equals(first) || first.startsWith(common + " ") || common.startsWith(first + " ")) {
+        if (commonMatchesFirst(candidate.firstName(), candidate.commonName())) {
+            return true;
+        }
+        if (hasCoherentEarlyCommon(candidate.firstName(), candidate.lastName(), candidate.commonName())) {
             return true;
         }
         return candidate.inlineName() != null
-                && candidate.inlineName().contains(first)
-                && candidate.inlineName().contains(candidate.lastName());
+                && normalizedContains(candidate.inlineName(), candidate.firstName())
+                && normalizedContains(candidate.inlineName(), candidate.lastName());
     }
 
     private static int fullPairQuality(NamePairCandidate candidate) {
         int quality = candidate.score();
         if (candidate.inlineName() != null
-                && candidate.inlineName().contains(candidate.firstName())
-                && candidate.inlineName().contains(candidate.lastName())) {
+                && candidate.firstName() != null
+                && candidate.lastName() != null
+                && normalizedContains(candidate.inlineName(), candidate.firstName())
+                && normalizedContains(candidate.inlineName(), candidate.lastName())) {
             quality += 24;
         }
         if (candidate.commonName() != null) {
-            String first = candidate.firstName();
-            String common = candidate.commonName();
-            if (common.equals(first) || first.startsWith(common + " ") || common.startsWith(first + " ")) {
+            if (commonMatchesFirst(candidate.firstName(), candidate.commonName())) {
                 quality += 16;
             }
         }
         return quality;
+    }
+
+    private static boolean isBetterFullPairCandidate(NamePairCandidate candidate, NamePairCandidate current) {
+        int candidateQuality = fullPairQuality(candidate);
+        int currentQuality = fullPairQuality(current);
+        if (candidateQuality > currentQuality + 12) {
+            return true;
+        }
+        if (currentQuality > candidateQuality + 12) {
+            return false;
+        }
+        int candidateDistance = Math.abs(candidate.delta());
+        int currentDistance = Math.abs(current.delta());
+        if (candidateDistance != currentDistance) {
+            return candidateDistance < currentDistance;
+        }
+        return candidateQuality > currentQuality;
+    }
+
+    private static boolean hasInlineFullPair(NamePairCandidate candidate) {
+        return candidate.firstName() != null
+                && candidate.lastName() != null
+                && candidate.inlineName() != null
+                && normalizedContains(candidate.inlineName(), candidate.firstName())
+                && normalizedContains(candidate.inlineName(), candidate.lastName());
+    }
+
+    private static boolean hasCommonTriple(NamePairCandidate candidate) {
+        return candidate.firstName() != null
+                && candidate.lastName() != null
+                && candidate.commonName() != null
+                && !candidate.commonName().isBlank();
+    }
+
+    private static boolean hasCoherentCommonDisplay(NamePairCandidate candidate) {
+        if (!hasCommonTriple(candidate)) {
+            return false;
+        }
+        if (!candidate.commonName().contains(" ")) {
+            return true;
+        }
+        String firstToken = candidate.firstName().split("\\s+", 2)[0];
+        String commonToken = candidate.commonName().split("\\s+", 2)[0];
+        return firstToken.equals(commonToken);
+    }
+
+    private static boolean hasStrongCommonOverride(NamePairCandidate candidate) {
+        if (!hasCommonTriple(candidate)) {
+            return false;
+        }
+        if (commonMatchesFirst(candidate.firstName(), candidate.commonName())) {
+            return true;
+        }
+        if (hasCoherentEarlyCommon(candidate.firstName(), candidate.lastName(), candidate.commonName())) {
+            return true;
+        }
+        if (candidate.lastName() != null && normalizedContains(candidate.lastName(), candidate.commonName())) {
+            return true;
+        }
+        return candidate.inlineName() != null && normalizedContains(candidate.inlineName(), candidate.commonName());
+    }
+
+    private static boolean hasCoherentEarlyCommon(String firstName, String lastName, String commonName) {
+        if (commonMatchesFirst(firstName, commonName)) {
+            return true;
+        }
+        if (firstName == null || commonName == null || commonName.contains(" ")) {
+            if (lastName == null || commonName == null) {
+                return false;
+            }
+            for (String token : lastName.split("\\s+")) {
+                String normalizedToken = normalizeForCompare(token);
+                if (normalizedToken.length() >= 4 && normalizedContains(commonName, token)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        String normalizedCommon = normalizeForCompare(commonName);
+        for (String token : firstName.split("\\s+")) {
+            String normalizedToken = normalizeForCompare(token);
+            if (normalizedToken.length() >= 4
+                    && normalizedCommon.startsWith(normalizedToken.substring(0, 4))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean commonMatchesFirst(String firstName, String commonName) {
+        if (firstName == null || commonName == null) {
+            return false;
+        }
+        if (commonName.equals(firstName)
+                || firstName.startsWith(commonName + " ")
+                || commonName.startsWith(firstName + " ")) {
+            return true;
+        }
+        for (String token : firstName.split("\\s+")) {
+            if (token.equals(commonName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean normalizedContains(String haystack, String needle) {
+        if (haystack == null || needle == null) {
+            return false;
+        }
+        return normalizeForCompare(haystack).contains(normalizeForCompare(needle));
+    }
+
+    private static String normalizeForCompare(String value) {
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFD);
+        normalized = normalized.replaceAll("\\p{M}+", "");
+        return normalized.replaceAll("[^\\p{IsAlphabetic}\\p{IsDigit}]+", "").toLowerCase(Locale.ROOT);
     }
 
     private static String decodeCandidateString(byte[] payload, int start, int length) {
@@ -1911,12 +2389,17 @@ public final class GenericPlayerSubsetExtractor {
             if (decoded.indexOf('\uFFFD') >= 0) {
                 return null;
             }
+            int letterCount = 0;
             for (int i = 0; i < decoded.length(); i++) {
-                if (Character.isLetter(decoded.charAt(i))) {
-                    return decoded;
+                char ch = decoded.charAt(i);
+                if (Character.isISOControl(ch)) {
+                    return null;
+                }
+                if (Character.isLetter(ch)) {
+                    letterCount++;
                 }
             }
-            return null;
+            return letterCount > 0 ? decoded : null;
         } catch (RuntimeException exception) {
             return null;
         }
@@ -1964,6 +2447,63 @@ public final class GenericPlayerSubsetExtractor {
         }
         score += Math.max(0, 12 - value.length());
         return score;
+    }
+
+    private static int looseLastNameBias(String value) {
+        int bias = 0;
+        if (looksLikeSurnameWithParticle(value)) {
+            bias += 7;
+        }
+        if (looksLikeFullName(value)) {
+            bias -= 2;
+        }
+        return bias;
+    }
+
+    private static boolean preferLooseLastName(String strictLast, String looseLast) {
+        if (looseLast == null || looseLast.isBlank()) {
+            return false;
+        }
+        if (strictLast == null || strictLast.isBlank()) {
+            return true;
+        }
+        if (strictLast.equals(looseLast)) {
+            return false;
+        }
+        return looksLikeSurnameWithParticle(looseLast) && looksLikeFullName(strictLast);
+    }
+
+    private static boolean looksLikeSurnameWithParticle(String value) {
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return normalized.startsWith("van ")
+                || normalized.startsWith("van de ")
+                || normalized.startsWith("van den ")
+                || normalized.startsWith("van der ")
+                || normalized.startsWith("de ")
+                || normalized.startsWith("de la ")
+                || normalized.startsWith("del ")
+                || normalized.startsWith("di ")
+                || normalized.startsWith("el ")
+                || normalized.startsWith("al ")
+                || normalized.startsWith("'t ");
+    }
+
+    private static boolean looksLikeFullName(String value) {
+        String[] parts = value.trim().split("\\s+");
+        if (parts.length < 3) {
+            return false;
+        }
+        int titleCaseParts = 0;
+        for (String part : parts) {
+            if (part.isBlank()) {
+                continue;
+            }
+            char c = part.charAt(0);
+            if (Character.isUpperCase(c)) {
+                titleCaseParts++;
+            }
+        }
+        return titleCaseParts >= 3 && !looksLikeSurnameWithParticle(value);
     }
 
     private record Inputs(Path save, Path output) {
@@ -2031,7 +2571,7 @@ public final class GenericPlayerSubsetExtractor {
     private record InferredStandardCandidate(int startDelta, int bias, int score, int residueCount) {
     }
 
-    private record NameTables(Map<Integer, ScoredString> firstNames, Map<Integer, ScoredString> lastNames, Map<Integer, ScoredString> commonNames) {
+    private record NameTables(Map<Integer, ScoredString> firstNames, Map<Integer, ScoredString> lastNames, Map<Integer, ScoredString> commonNames, Map<Integer, ScoredString> earlyCommonNames, Map<Integer, ScoredString> looseLastNames) {
     }
 
     private record ScoredString(String value, int score) {
