@@ -27,7 +27,8 @@ public class PlayerController {
             @RequestParam(defaultValue = "0") int offset
     ) {
         return jdbcTemplate.query("""
-                select player_id, first_name, last_name, full_name, family, confidence, layout_variant, layout_score, invalid_field_count
+                select player_id, first_name, last_name, full_name, salary_per_week, contract_end_date, loan_expiry_date,
+                       parent_contract_end_date, family, confidence, layout_variant, layout_score, invalid_field_count
                 from players
                 order by player_id
                 limit ? offset ?
@@ -38,6 +39,10 @@ public class PlayerController {
                     row.put("firstName", rs.getString("first_name"));
                     row.put("lastName", rs.getString("last_name"));
                     row.put("fullName", rs.getString("full_name"));
+                    row.put("salaryPerWeek", (Integer) rs.getObject("salary_per_week"));
+                    row.put("contractEndDate", rs.getObject("contract_end_date"));
+                    row.put("loanExpiryDate", rs.getObject("loan_expiry_date"));
+                    row.put("parentContractEndDate", rs.getObject("parent_contract_end_date"));
                     row.put("family", rs.getString("family"));
                     row.put("confidence", rs.getString("confidence"));
                     row.put("layoutVariant", rs.getString("layout_variant"));
@@ -53,8 +58,9 @@ public class PlayerController {
     @GetMapping("/{playerId}")
     public Map<String, Object> getPlayer(@PathVariable long playerId) {
         Map<String, Object> player = jdbcTemplate.queryForObject("""
-                select player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name, discovery_source, family,
-                       family_score, confidence, layout_variant, layout_score, invalid_field_count
+                select player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name,
+                       salary_per_week, salary_per_week_raw, contract_end_date, loan_expiry_date, parent_contract_end_date,
+                       discovery_source, family, family_score, confidence, layout_variant, layout_score, invalid_field_count
                 from players
                 where player_id = ?
                 """,
@@ -66,6 +72,11 @@ public class PlayerController {
                     row.put("firstName", rs.getString("first_name"));
                     row.put("lastName", rs.getString("last_name"));
                     row.put("fullName", rs.getString("full_name"));
+                    row.put("salaryPerWeek", (Integer) rs.getObject("salary_per_week"));
+                    row.put("salaryPerWeekRaw", (Integer) rs.getObject("salary_per_week_raw"));
+                    row.put("contractEndDate", rs.getObject("contract_end_date"));
+                    row.put("loanExpiryDate", rs.getObject("loan_expiry_date"));
+                    row.put("parentContractEndDate", rs.getObject("parent_contract_end_date"));
                     row.put("discoverySource", rs.getString("discovery_source"));
                     row.put("family", rs.getString("family"));
                     row.put("familyScore", rs.getInt("family_score"));

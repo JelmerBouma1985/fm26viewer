@@ -41,6 +41,11 @@ public class PlayerImportService {
         jdbcTemplate.update("alter table players add column if not exists first_name varchar(255)");
         jdbcTemplate.update("alter table players add column if not exists last_name varchar(255)");
         jdbcTemplate.update("alter table players add column if not exists full_name varchar(512)");
+        jdbcTemplate.update("alter table players add column if not exists salary_per_week int");
+        jdbcTemplate.update("alter table players add column if not exists salary_per_week_raw int");
+        jdbcTemplate.update("alter table players add column if not exists contract_end_date date");
+        jdbcTemplate.update("alter table players add column if not exists loan_expiry_date date");
+        jdbcTemplate.update("alter table players add column if not exists parent_contract_end_date date");
         jdbcTemplate.update("delete from player_fields");
         jdbcTemplate.update("delete from players");
 
@@ -54,6 +59,11 @@ public class PlayerImportService {
                     player.firstName(),
                     player.lastName(),
                     player.fullName(),
+                    player.salaryPerWeek(),
+                    player.salaryPerWeekRaw(),
+                    player.contractEndDate(),
+                    player.loanExpiryDate(),
+                    player.parentContractEndDate(),
                     player.discoverySource(),
                     player.family(),
                     player.familyScore(),
@@ -73,9 +83,11 @@ public class PlayerImportService {
 
         jdbcTemplate.batchUpdate("""
                 insert into players (
-                    player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name, discovery_source, family,
+                    player_id, person_pair_offset, extra_pair_offset, first_name, last_name, full_name,
+                    salary_per_week, salary_per_week_raw, contract_end_date, loan_expiry_date, parent_contract_end_date,
+                    discovery_source, family,
                     family_score, confidence, layout_variant, layout_score, invalid_field_count
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, playerRows);
 
         jdbcTemplate.batchUpdate("""

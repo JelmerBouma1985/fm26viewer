@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -322,6 +323,14 @@ public final class GenericPlayerSubsetExtractor {
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
                 continue;
             }
+            ContractData contractData = resolveContractData(payload, candidate.id());
+            Map<String, Integer> extractedFields = new LinkedHashMap<>(best.decoded());
+            if (contractData.salaryPerWeek() != null) {
+                extractedFields.put("salary_per_week", contractData.salaryPerWeek());
+            }
+            if (contractData.salaryPerWeekRaw() != null) {
+                extractedFields.put("salary_per_week_raw", contractData.salaryPerWeekRaw());
+            }
             extracted.add(new ExtractedPlayer(
                     candidate.id(),
                     candidate.personPair(),
@@ -329,6 +338,11 @@ public final class GenericPlayerSubsetExtractor {
                     resolvedName.firstName(),
                     resolvedName.lastName(),
                     resolvedName.fullName(),
+                    contractData.salaryPerWeek(),
+                    contractData.salaryPerWeekRaw(),
+                    contractData.contractEndDate(),
+                    contractData.loanExpiryDate(),
+                    contractData.parentContractEndDate(),
                     discoverySource,
                     effectiveFamily,
                     initialFamily.score(),
@@ -336,7 +350,7 @@ public final class GenericPlayerSubsetExtractor {
                     best.name(),
                     best.score(),
                     best.invalidCount(),
-                    Collections.unmodifiableMap(new LinkedHashMap<>(best.decoded()))
+                    Collections.unmodifiableMap(extractedFields)
             ));
         }
         return new ExtractionResult(save, payload.length, likelyPlayers.size(), List.copyOf(extracted));
@@ -1324,6 +1338,11 @@ public final class GenericPlayerSubsetExtractor {
             appendNestedField(json, "firstName", record.firstName() == null ? "null" : quote(record.firstName()), true);
             appendNestedField(json, "lastName", record.lastName() == null ? "null" : quote(record.lastName()), true);
             appendNestedField(json, "fullName", record.fullName() == null ? "null" : quote(record.fullName()), true);
+            appendNestedField(json, "salaryPerWeek", record.salaryPerWeek() == null ? "null" : Integer.toString(record.salaryPerWeek()), true);
+            appendNestedField(json, "salaryPerWeekRaw", record.salaryPerWeekRaw() == null ? "null" : Integer.toString(record.salaryPerWeekRaw()), true);
+            appendNestedField(json, "contractEndDate", record.contractEndDate() == null ? "null" : quote(record.contractEndDate().toString()), true);
+            appendNestedField(json, "loanExpiryDate", record.loanExpiryDate() == null ? "null" : quote(record.loanExpiryDate().toString()), true);
+            appendNestedField(json, "parentContractEndDate", record.parentContractEndDate() == null ? "null" : quote(record.parentContractEndDate().toString()), true);
             appendNestedField(json, "discoverySource", quote(record.discoverySource()), true);
             appendNestedField(json, "family", quote(record.family()), true);
             appendNestedField(json, "familyScore", Integer.toString(record.familyScore()), true);
@@ -2505,6 +2524,86 @@ public final class GenericPlayerSubsetExtractor {
         return titleCaseParts >= 3 && !looksLikeSurnameWithParticle(value);
     }
 
+    private static ContractData resolveContractData(byte[] payload, int playerId) {
+        IsolatedContractExtractor.Extraction contractExtraction = IsolatedContractExtractor.extract(payload, playerId);
+        IsolatedContractExtractor.ClusterCandidate bestContract = contractExtraction.best();
+        IsolatedLoanExtractor.LoanExtraction loanExtraction = IsolatedLoanExtractor.extract(payload, playerId);
+
+        Integer salaryRaw = null;
+        Integer salaryDisplay = null;
+        LocalDate contractEndDate = null;
+        LocalDate loanExpiryDate = null;
+        LocalDate parentContractEndDate = null;
+
+        if (bestContract != null) {
+            if (bestContract.salary() != null) {
+                salaryRaw = bestContract.salary().value();
+                salaryDisplay = roundSalaryForDisplay(salaryRaw);
+            }
+            if (bestContract.contractEnd() != null) {
+                contractEndDate = bestContract.contractEnd().date();
+            }
+        }
+
+        if (looksLikeLoanContract(loanExtraction)) {
+            if (loanExtraction.salary() != null) {
+                salaryRaw = loanExtraction.salary().value();
+                salaryDisplay = roundLoanSalaryForDisplay(salaryRaw);
+            }
+            if (loanExtraction.loanExpiry() != null) {
+                loanExpiryDate = loanExtraction.loanExpiry().date();
+            }
+            if (loanExtraction.parentExpiry() != null) {
+                parentContractEndDate = loanExtraction.parentExpiry().date();
+                contractEndDate = parentContractEndDate;
+            }
+        }
+
+        return new ContractData(salaryDisplay, salaryRaw, contractEndDate, loanExpiryDate, parentContractEndDate);
+    }
+
+    private static boolean looksLikeLoanContract(IsolatedLoanExtractor.LoanExtraction extraction) {
+        if (extraction == null
+                || extraction.anchor() < 0
+                || extraction.loanExpiry() == null
+                || extraction.parentExpiry() == null
+                || extraction.salary() == null
+                || extraction.salary().hex() == null) {
+            return false;
+        }
+        return extraction.salary().hex().contains("01 0b 00 01 00 00 00 05");
+    }
+
+    private static int roundSalaryForDisplay(int raw) {
+        int step;
+        if (raw < 1_000) {
+            step = 25;
+        } else if (raw < 2_000) {
+            step = 100;
+        } else if (raw < 20_000) {
+            step = 250;
+        } else {
+            step = 500;
+        }
+        return ((raw + (step / 2)) / step) * step;
+    }
+
+    private static int roundLoanSalaryForDisplay(int raw) {
+        int step;
+        if (raw < 500) {
+            step = 10;
+        } else if (raw < 1_000) {
+            step = 50;
+        } else if (raw < 2_000) {
+            step = 100;
+        } else if (raw < 20_000) {
+            step = 250;
+        } else {
+            step = 500;
+        }
+        return ((raw + (step / 2)) / step) * step;
+    }
+
     private record Inputs(Path save, Path output) {
         private static Inputs fromArgs(String[] args) {
             if (args.length == 2) {
@@ -2545,6 +2644,11 @@ public final class GenericPlayerSubsetExtractor {
             String firstName,
             String lastName,
             String fullName,
+            Integer salaryPerWeek,
+            Integer salaryPerWeekRaw,
+            LocalDate contractEndDate,
+            LocalDate loanExpiryDate,
+            LocalDate parentContractEndDate,
             String discoverySource,
             String family,
             int familyScore,
@@ -2580,6 +2684,15 @@ public final class GenericPlayerSubsetExtractor {
     }
 
     private record ResolvedName(String firstName, String lastName, String fullName) {
+    }
+
+    private record ContractData(
+            Integer salaryPerWeek,
+            Integer salaryPerWeekRaw,
+            LocalDate contractEndDate,
+            LocalDate loanExpiryDate,
+            LocalDate parentContractEndDate
+    ) {
     }
 
     private enum Enc {
