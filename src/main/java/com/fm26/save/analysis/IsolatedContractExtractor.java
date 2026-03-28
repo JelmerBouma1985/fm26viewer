@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -27,6 +28,7 @@ public final class IsolatedContractExtractor {
 
     public static void main(String[] args) throws Exception {
         byte[] payload = loadPayload(Path.of("games/Feyenoord_after.fm"));
+        PreparedPayload prepared = prepare(payload);
         Map<Integer, String> players = new LinkedHashMap<>();
         players.put(16_023_929, "Trauner");
         players.put(37_060_899, "Smal");
@@ -39,7 +41,7 @@ public final class IsolatedContractExtractor {
         out.append("{\n");
         int rendered = 0;
         for (Map.Entry<Integer, String> entry : players.entrySet()) {
-            Extraction extraction = extract(payload, entry.getKey());
+            Extraction extraction = extract(prepared, entry.getKey());
             out.append("  ").append(quote(entry.getValue())).append(": ");
             out.append(renderExtraction(extraction));
             if (++rendered < players.size()) {
@@ -52,10 +54,30 @@ public final class IsolatedContractExtractor {
     }
 
     public static Extraction extract(byte[] payload, int playerId) {
-        List<Integer> pairedHits = findPairedHits(payload, playerId);
+        return extract(prepare(payload), playerId);
+    }
+
+    public static PreparedPayload prepare(byte[] payload) {
+        Map<Integer, List<Integer>> pairedHitsById = new HashMap<>();
+        for (int off = 0; off + 8 <= payload.length; off++) {
+            int left = u32le(payload, off);
+            if (left == 0 || left == -1) {
+                continue;
+            }
+            if (u32le(payload, off + 4) != left) {
+                continue;
+            }
+            pairedHitsById.computeIfAbsent(left, ignored -> new ArrayList<>()).add(off);
+        }
+        return new PreparedPayload(payload, pairedHitsById, new HashMap<>());
+    }
+
+    public static Extraction extract(PreparedPayload prepared, int playerId) {
+        byte[] payload = prepared.payload();
+        List<Integer> pairedHits = prepared.pairedHitsById().getOrDefault(playerId, List.of());
         List<ClusterCandidate> candidates = new ArrayList<>();
         for (int hit : pairedHits) {
-            ClusterCandidate candidate = analyzeCluster(payload, hit);
+            ClusterCandidate candidate = prepared.clusterCache().computeIfAbsent(hit, ignored -> analyzeCluster(payload, hit));
             if (candidate != null) {
                 candidates.add(candidate);
             }
@@ -287,36 +309,6 @@ public final class IsolatedContractExtractor {
                 && payload[off + 11] == (byte) 0xff;
     }
 
-    private static List<Integer> findPairedHits(byte[] payload, int playerId) {
-        byte[] needle = u32(playerId);
-        List<Integer> hits = new ArrayList<>();
-        int start = 0;
-        while (true) {
-            int hit = indexOf(payload, needle, start);
-            if (hit < 0) {
-                break;
-            }
-            if (hit + 8 <= payload.length && u32le(payload, hit + 4) == playerId) {
-                hits.add(hit);
-            }
-            start = hit + 1;
-        }
-        return hits;
-    }
-
-    private static int indexOf(byte[] payload, byte[] needle, int start) {
-        outer:
-        for (int off = Math.max(0, start); off + needle.length <= payload.length; off++) {
-            for (int i = 0; i < needle.length; i++) {
-                if (payload[off + i] != needle[i]) {
-                    continue outer;
-                }
-            }
-            return off;
-        }
-        return -1;
-    }
-
     private static int u16le(byte[] payload, int off) {
         return (payload[off] & 0xFF) | ((payload[off + 1] & 0xFF) << 8);
     }
@@ -326,15 +318,6 @@ public final class IsolatedContractExtractor {
                 | ((payload[off + 1] & 0xFF) << 8)
                 | ((payload[off + 2] & 0xFF) << 16)
                 | ((payload[off + 3] & 0xFF) << 24);
-    }
-
-    private static byte[] u32(int value) {
-        return new byte[]{
-                (byte) (value & 0xFF),
-                (byte) ((value >>> 8) & 0xFF),
-                (byte) ((value >>> 16) & 0xFF),
-                (byte) ((value >>> 24) & 0xFF)
-        };
     }
 
     private static String renderExtraction(Extraction extraction) {
@@ -461,6 +444,13 @@ public final class IsolatedContractExtractor {
     }
 
     public record Extraction(int playerId, List<Integer> pairedHits, List<ClusterCandidate> candidates, ClusterCandidate best) {
+    }
+
+    public record PreparedPayload(
+            byte[] payload,
+            Map<Integer, List<Integer>> pairedHitsById,
+            Map<Integer, ClusterCandidate> clusterCache
+    ) {
     }
 
     public static final class ClusterCandidate {

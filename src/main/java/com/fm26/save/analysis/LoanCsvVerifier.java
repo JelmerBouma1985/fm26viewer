@@ -24,6 +24,7 @@ public final class LoanCsvVerifier {
     public static void main(String[] args) throws Exception {
         Path csv = args.length > 0 ? Path.of(args[0]) : Path.of("loan.csv");
         byte[] payload = loadPayload(Path.of("games/Feyenoord_after.fm"));
+        IsolatedContractExtractor.PreparedPayload prepared = IsolatedContractExtractor.prepare(payload);
         List<Row> rows = readCsv(csv);
 
         int parentMatches = 0;
@@ -35,7 +36,7 @@ public final class LoanCsvVerifier {
         List<String> missing = new ArrayList<>();
 
         for (Row row : rows) {
-            IsolatedLoanExtractor.LoanExtraction extraction = IsolatedLoanExtractor.extract(payload, row.id());
+            IsolatedLoanExtractor.LoanExtraction extraction = IsolatedLoanExtractor.extract(prepared, row.id());
             if (extraction.anchor() < 0
                     || extraction.loanExpiry() == null
                     || extraction.parentExpiry() == null

@@ -24,6 +24,7 @@ public final class ContractEndCsvVerifier {
     public static void main(String[] args) throws Exception {
         Path csv = args.length > 0 ? Path.of(args[0]) : Path.of("contract_end.csv");
         byte[] payload = loadPayload(Path.of("games/Feyenoord_after.fm"));
+        IsolatedContractExtractor.PreparedPayload prepared = IsolatedContractExtractor.prepare(payload);
         List<Row> rows = readCsv(csv);
 
         int matches = 0;
@@ -31,7 +32,7 @@ public final class ContractEndCsvVerifier {
         List<String> missing = new ArrayList<>();
 
         for (Row row : rows) {
-            IsolatedContractExtractor.Extraction extraction = IsolatedContractExtractor.extract(payload, row.id());
+            IsolatedContractExtractor.Extraction extraction = IsolatedContractExtractor.extract(prepared, row.id());
             IsolatedContractExtractor.ClusterCandidate best = extraction.best();
             if (best == null || best.contractEnd() == null || best.contractEnd().date() == null) {
                 missing.add(row.id() + " " + row.name());

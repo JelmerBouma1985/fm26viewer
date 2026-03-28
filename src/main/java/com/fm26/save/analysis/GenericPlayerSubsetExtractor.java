@@ -2,6 +2,8 @@ package com.fm26.save.analysis;
 
 import com.github.luben.zstd.ZstdIOException;
 import com.github.luben.zstd.ZstdInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,6 +25,8 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 public final class GenericPlayerSubsetExtractor {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(GenericPlayerSubsetExtractor.class);
 
     private static final int FMF_ZSTD_OFFSET = 26;
     private static final int DUP_PAIR_DISTANCE = 4;
@@ -269,6 +273,7 @@ public final class GenericPlayerSubsetExtractor {
         byte[] payload = loadPayload(save);
         List<PlayerCandidate> likelyPlayers = findLikelyPlayers(payload);
         NameTables nameTables = buildNameTables(payload);
+        IsolatedContractExtractor.PreparedPayload preparedContracts = IsolatedContractExtractor.prepare(payload);
 
         List<ExtractedPlayer> extracted = new ArrayList<>();
         for (PlayerCandidate candidate : likelyPlayers) {
@@ -323,7 +328,7 @@ public final class GenericPlayerSubsetExtractor {
             if (shouldRejectTailCandidate(payload, candidate.personPair(), effectiveFamily, best)) {
                 continue;
             }
-            ContractData contractData = resolveContractData(payload, candidate.id());
+            ContractData contractData = resolveContractData(preparedContracts, candidate.id());
             Map<String, Integer> extractedFields = new LinkedHashMap<>(best.decoded());
             if (contractData.salaryPerWeek() != null) {
                 extractedFields.put("salary_per_week", contractData.salaryPerWeek());
@@ -2524,10 +2529,10 @@ public final class GenericPlayerSubsetExtractor {
         return titleCaseParts >= 3 && !looksLikeSurnameWithParticle(value);
     }
 
-    private static ContractData resolveContractData(byte[] payload, int playerId) {
-        IsolatedContractExtractor.Extraction contractExtraction = IsolatedContractExtractor.extract(payload, playerId);
+    private static ContractData resolveContractData(IsolatedContractExtractor.PreparedPayload preparedContracts, int playerId) {
+        IsolatedContractExtractor.Extraction contractExtraction = IsolatedContractExtractor.extract(preparedContracts, playerId);
         IsolatedContractExtractor.ClusterCandidate bestContract = contractExtraction.best();
-        IsolatedLoanExtractor.LoanExtraction loanExtraction = IsolatedLoanExtractor.extract(payload, playerId);
+        IsolatedLoanExtractor.LoanExtraction loanExtraction = IsolatedLoanExtractor.extract(preparedContracts, playerId);
 
         Integer salaryRaw = null;
         Integer salaryDisplay = null;

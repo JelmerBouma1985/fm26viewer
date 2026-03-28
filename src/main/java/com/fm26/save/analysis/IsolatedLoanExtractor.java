@@ -24,11 +24,16 @@ public final class IsolatedLoanExtractor {
     }
 
     public static LoanExtraction extract(byte[] payload, int playerId) {
-        IsolatedContractExtractor.Extraction base = IsolatedContractExtractor.extract(payload, playerId);
+        return extract(IsolatedContractExtractor.prepare(payload), playerId);
+    }
+
+    public static LoanExtraction extract(IsolatedContractExtractor.PreparedPayload prepared, int playerId) {
+        IsolatedContractExtractor.Extraction base = IsolatedContractExtractor.extract(prepared, playerId);
         IsolatedContractExtractor.ClusterCandidate best = base.best();
         if (best == null) {
             return new LoanExtraction(playerId, -1, null, null, null);
         }
+        byte[] payload = prepared.payload();
         int anchor = best.anchor();
         List<DateCandidate> negativeDates = findNegativeDates(payload, anchor);
         DateCandidate loanExpiry = negativeDates.isEmpty() ? null : negativeDates.getLast();
